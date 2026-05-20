@@ -1,5 +1,3 @@
-"""Compatibilidade: reexporta views da API a partir das features."""
-
 from studio.features.appointments.controller import (
     AppointmentChangeRequestViewSet,
     AppointmentViewSet,

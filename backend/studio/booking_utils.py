@@ -108,6 +108,7 @@ def notify_change_request_created(change_request):
         notify_change_request_email_summary,
     )
 
+    # E-mail so apos commit: evita avisar alteracao que foi revertida na transacao.
     transaction.on_commit(
         lambda: notify_change_request_email_summary(
             appt,
@@ -121,6 +122,7 @@ def user_appointment_scope_queryset(user):
     profile, _ = UserProfile.objects.select_related("tattooer").get_or_create(user=user)
     role = profile.role
     if role == UserProfile.ROLE_CLIENT:
+        # Cliente ve agendamentos pelo e-mail do cadastro Client, nao por FK User->Client.
         email = (user.email or "").strip()
         if email:
             return qs.filter(client__email__iexact=email)

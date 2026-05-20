@@ -4,7 +4,7 @@ from studio.models import Appointment, UserProfile
 
 
 def recipient_emails_for_appointment(appointment: Appointment) -> list[str]:
-    """Destinatarios para e-mails transacionais de agendamento (HU19)."""
+    # HU19: cliente, contato do tatuador (se e-mail) e usuarios com role studio.
     emails: set[str] = set()
     ce = (appointment.client.email or "").strip()
     if ce:

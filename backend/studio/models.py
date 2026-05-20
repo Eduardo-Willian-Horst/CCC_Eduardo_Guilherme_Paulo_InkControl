@@ -74,6 +74,7 @@ class Appointment(models.Model):
         (STATUS_DONE, "Concluido"),
         (STATUS_CANCELLED, "Cancelado"),
     )
+    # Transicoes de status permitidas (maquina de estados do agendamento).
     ALLOWED_STATUS_TRANSITIONS = {
         STATUS_REQUESTED: {STATUS_WAITING_BUDGET, STATUS_CONFIRMED, STATUS_CANCELLED},
         STATUS_WAITING_BUDGET: {STATUS_CONFIRMED, STATUS_CANCELLED},
@@ -113,16 +114,9 @@ class Appointment(models.Model):
         blank=True,
     )
     duration_minutes = models.PositiveSmallIntegerField(default=60)
-    health_snapshot = models.JSONField(
-        default=dict,
-        blank=True,
-        help_text="Copia da ficha de saude no momento da criacao do agendamento (DVP HU06).",
-    )
-    reminder_email_sent_at = models.DateTimeField(
-        null=True,
-        blank=True,
-        help_text="Quando o lembrete por e-mail (30 min antes) foi enviado (HU18).",
-    )
+    # HU06: copia imutavel da ficha no create; alteracoes futuras na ficha nao mudam o historico.
+    health_snapshot = models.JSONField(default=dict, blank=True)
+    reminder_email_sent_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -171,16 +165,13 @@ class StudioSettings(models.Model):
 
     @classmethod
     def get_solo(cls):
+        # Um registro fixo (pk=1) = expediente global do estudio.
         obj, _ = cls.objects.get_or_create(pk=1)
         return obj
 
 
 class StudioBilling(models.Model):
-    """Registro singleton (pk=1) — mensalidade do InkControl para o estudio (DVP HU16–HU17)."""
-
-    paid_until = models.DateTimeField(
-        help_text="Acesso ao sistema liberado ate este instante (UTC logico com USE_TZ).",
-    )
+    paid_until = models.DateTimeField()
     payment_cancelled_at = models.DateTimeField(null=True, blank=True)
     last_payment_attempt_at = models.DateTimeField(null=True, blank=True)
     last_payment_attempt_ok = models.BooleanField(null=True, blank=True)
@@ -195,6 +186,7 @@ class StudioBilling(models.Model):
 
     @classmethod
     def get_solo(cls):
+        # Um registro fixo (pk=1) = mensalidade do InkControl para o estudio (HU16).
         obj, created = cls.objects.get_or_create(
             pk=1,
             defaults={"paid_until": timezone.now() + timedelta(days=3650)},

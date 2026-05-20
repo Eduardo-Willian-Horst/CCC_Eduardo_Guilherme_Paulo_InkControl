@@ -10,6 +10,7 @@ from studio.models import StudioBilling
 def extend_paid_period(days: int | None = None) -> StudioBilling:
     days = days or int(getattr(settings, "SUBSCRIPTION_BILLING_PERIOD_DAYS", 30))
     b = get_billing()
+    # Renova a partir do fim do periodo ja pago, nao do dia do pagamento (nao perde dias).
     base = max(timezone.now(), b.paid_until)
     b.paid_until = base + timedelta(days=days)
     b.payment_cancelled_at = None

@@ -33,7 +33,7 @@ def _user_from_token(request):
 
 
 class SubscriptionGateMiddleware:
-    """Bloqueia API autenticada se a mensalidade do estudio estiver expirada (DVP HU16)."""
+    # Token valido + paid_until expirado -> 402; rotas de login/subscription/pay ficam liberadas.
 
     def __init__(self, get_response):
         self.get_response = get_response

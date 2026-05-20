@@ -8,10 +8,7 @@ def get_user_role(user):
 
 
 class RoleByActionPermission(BasePermission):
-    """
-    Expects `view.role_permissions = {"action": {"role_a", "role_b"}}`.
-    If an action is not present in role_permissions, it is allowed.
-    """
+    # Cada ViewSet define role_permissions: action -> set de roles; ausente = liberado.
 
     def has_permission(self, request, view):
         if not request.user or not request.user.is_authenticated:

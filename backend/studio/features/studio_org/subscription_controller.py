@@ -43,10 +43,7 @@ class StudioSubscriptionStatusView(APIView):
 
 
 class StudioSubscriptionPayView(APIView):
-    """
-    Simula cobrança de mensalidade (DVP HU16).
-    Integração com gateway (Stripe etc.) pode substituir este fluxo.
-    """
+    # HU16: estende paid_until sem gateway; em producao trocar por webhook do provedor de pagamento.
 
     permission_classes = [permissions.IsAuthenticated]
 

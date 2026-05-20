@@ -10,10 +10,7 @@ _token_generator = PasswordResetTokenGenerator()
 
 
 def request_password_reset(email: str) -> bool:
-    """
-    Se existir usuario ativo com o e-mail, envia link de redefinicao.
-    Retorna True se o fluxo foi processado (nao revela se o e-mail existe).
-    """
+    # Sempre retorna True para nao revelar se o e-mail esta cadastrado (enumeracao de contas).
     email_clean = (email or "").strip().lower()
     if not email_clean:
         return True

@@ -7,7 +7,6 @@ logger = logging.getLogger(__name__)
 
 
 def send_plain_email(subject: str, body: str, to_emails: list[str]) -> None:
-    """Envia e-mail texto simples; falhas nao derrubam o request se EMAIL_FAIL_SILENTLY."""
     if not to_emails:
         return
     recipients = [e.strip() for e in to_emails if e and str(e).strip()]
