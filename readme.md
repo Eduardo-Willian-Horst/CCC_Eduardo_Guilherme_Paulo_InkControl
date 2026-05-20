@@ -70,7 +70,7 @@ Abra [http://localhost:5173](http://localhost:5173). O Vite encaminha `/api` par
 ### Estúdio (multi-tenant)
 
 - `GET/PATCH /api/studios/{id}/` — dados do estúdio (admin do próprio tenant)
-- `GET/PATCH /api/studio-settings/?studio={id}` — expediente e **`offers_consultation`** (HU12)
+- `GET/PATCH /api/studio-settings/?studio={id}` — expediente e **`offers_consultation`** 
 - `GET/POST /api/studio/subscription/` — mensalidade **por estúdio**
 
 ### Cadastros e agenda
@@ -78,11 +78,11 @@ Abra [http://localhost:5173](http://localhost:5173). O Vite encaminha `/api` par
 - CRUD `/api/clients/`, `/api/tattooers/`, `/api/appointments/`
 - `POST /api/appointments/{id}/cancel/`
 - `GET/POST /api/appointment-change-requests/` + `accept/` / `reject/`
-- `GET/POST /api/portfolio-images/?client=` — referências no perfil do cliente (RF04)
+- `GET/POST /api/portfolio-images/?client=` — referências no perfil do cliente 
 - `GET /api/system-users/` — lista unificada (papel `studio`)
 - `GET/PATCH/DELETE /api/accounts/{id}/` — contas de login
 
-### Segurança (RNF05 / RNF06)
+### Segurança
 
 - Token expira após inatividade (`TOKEN_INACTIVITY_MINUTES`, padrão 30)
 - Bloqueio de login após tentativas inválidas (`LOGIN_MAX_FAILED_ATTEMPTS`, `LOGIN_LOCKOUT_MINUTES`)
@@ -152,7 +152,7 @@ Ver **`backend/README.md`**: arquitetura, fluxo HTTP, multi-tenant, RBAC, agenda
 
 - `GET/POST/PATCH /api/appointments/{id}/budget/` — envio de valor e notas (estúdio/tatuador)
 
-### Pagamento simulado (HU20)
+### Pagamento simulado
 
 - `POST /api/studio/subscription/pay/` com `simulate_failure: true` registra falha e envia e-mail
 
