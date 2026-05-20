@@ -1,7 +1,11 @@
+"""CRUD de tatuadores vinculados ao estudio (tenant)."""
+
 from django.db.models import Q
 from rest_framework import permissions, viewsets
+from rest_framework.exceptions import ValidationError
 
 from studio.models import Tattooer, UserProfile
+from studio.studio_scope import filter_tattooers_for_user, tattooer_has_blocking_appointments
 from studio.permissions import RoleByActionPermission
 from studio.serializers import TattooerSerializer
 
@@ -40,7 +44,19 @@ class TattooerViewSet(viewsets.ModelViewSet):
             )
         if is_active in {"true", "false"}:
             queryset = queryset.filter(is_active=(is_active == "true"))
+        queryset = filter_tattooers_for_user(
+            queryset,
+            self.request.user,
+            self.request.query_params.get("studio"),
+        )
         return queryset
+
+    def perform_destroy(self, instance):
+        if tattooer_has_blocking_appointments(instance):
+            raise ValidationError(
+                "Nao e possivel excluir tatuador com agendamentos que nao estejam cancelados."
+            )
+        super().perform_destroy(instance)
 
 
 __all__ = ["TattooerViewSet"]

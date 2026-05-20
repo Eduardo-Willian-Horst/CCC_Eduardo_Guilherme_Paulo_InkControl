@@ -1,3 +1,5 @@
+"""HU10: remove reference_image de agendamentos done ha mais de 7 dias."""
+
 from datetime import timedelta
 
 from django.core.management.base import BaseCommand

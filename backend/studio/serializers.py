@@ -1,51 +1,66 @@
-from django.contrib.auth.models import User
-from django.utils.dateparse import parse_datetime
-from rest_framework import serializers
+"""
+Serializers DRF: validacao de entrada/saida da API.
 
-from .booking_utils import (
-    appointment_intervals_overlap,
-    can_respond_to_change_request,
-    user_appointment_scope_queryset,
-    validate_scheduled_within_studio_hours,
+Regras de negocio em studio/services/; serializers fazem I/O e chamam os servicos.
+"""
+
+from django.contrib.auth.models import User
+from rest_framework import serializers
+from .booking_utils import can_respond_to_change_request, user_appointment_scope_queryset
+from studio.services.appointment_service import (
+    prepare_appointment_create,
+    service_error_to_drf,
+    validate_appointment_write,
 )
-from .health_snapshot import build_health_snapshot
+from studio.services.change_request_service import validate_change_request_write
+from studio.services.exceptions import ServiceValidationError
+from studio.services.image_validation import validate_uploaded_image
+from studio.services.registration_service import register_app_user
 from .models import (
     Appointment,
     AppointmentChangeRequest,
     Client,
     ClientHealthForm,
+    ClientPortfolioImage,
     InAppNotification,
+    Studio,
     StudioSettings,
     Tattooer,
     UserProfile,
 )
 from .permissions import get_user_role
+from .studio_scope import (
+    account_user_has_blocking_appointments,
+    client_has_blocking_appointments,
+    get_user_studio_id,
+    tattooer_has_blocking_appointments,
+)
 
 
 class RegisterSerializer(serializers.Serializer):
+    """Cadastro publico de cliente ou tatuador (nao cria estudio — use /api/studios/register/)."""
+
     name = serializers.CharField(max_length=150)
     email = serializers.EmailField()
     password = serializers.CharField(min_length=8, write_only=True)
     role = serializers.ChoiceField(
-        choices=[UserProfile.ROLE_CLIENT, UserProfile.ROLE_TATTOOER, UserProfile.ROLE_STUDIO],
+        choices=[UserProfile.ROLE_CLIENT, UserProfile.ROLE_TATTOOER],
         default=UserProfile.ROLE_CLIENT,
     )
 
     def validate_email(self, value):
-        if User.objects.filter(email__iexact=value).exists():
-            raise serializers.ValidationError("Este e-mail ja esta em uso.")
         return value.lower()
 
     def create(self, validated_data):
-        email = validated_data["email"]
-        user = User.objects.create_user(
-            username=email,
-            first_name=validated_data["name"],
-            email=email,
-            password=validated_data["password"],
-        )
-        UserProfile.objects.create(user=user, role=validated_data["role"])
-        return user
+        try:
+            return register_app_user(
+                name=validated_data["name"],
+                email=validated_data["email"],
+                password=validated_data["password"],
+                role=validated_data["role"],
+            )
+        except ServiceValidationError as exc:
+            raise service_error_to_drf(exc) from exc
 
 
 class LoginSerializer(serializers.Serializer):
@@ -58,6 +73,7 @@ class ClientSerializer(serializers.ModelSerializer):
         model = Client
         fields = [
             "id",
+            "studio",
             "name",
             "phone",
             "email",
@@ -65,14 +81,11 @@ class ClientSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "created_at", "updated_at"]
-
-    def _has_blocking_appointments(self, client: Client) -> bool:
-        return client.appointments.exclude(status=Appointment.STATUS_CANCELLED).exists()
+        read_only_fields = ["id", "studio", "created_at", "updated_at"]
 
     def update(self, instance, validated_data):
         if validated_data.get("is_active") is False and instance.is_active:
-            if self._has_blocking_appointments(instance):
+            if client_has_blocking_appointments(instance):
                 raise serializers.ValidationError(
                     {
                         "is_active": (
@@ -92,11 +105,108 @@ class TattooerSerializer(serializers.ModelSerializer):
             "name",
             "artistic_style",
             "contact",
+            "studio",
             "is_active",
             "created_at",
             "updated_at",
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
+
+    def create(self, validated_data):
+        request = self.context.get("request")
+        if request and request.user.is_authenticated and not validated_data.get("studio"):
+            from .models import Studio
+
+            validated_data["studio"] = Studio.objects.get(
+                pk=get_user_studio_id(request.user)
+            )
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        if validated_data.get("is_active") is False and instance.is_active:
+            if tattooer_has_blocking_appointments(instance):
+                raise serializers.ValidationError(
+                    {
+                        "is_active": (
+                            "Nao e possivel inativar tatuador com agendamentos "
+                            "que nao estejam cancelados."
+                        )
+                    }
+                )
+        return super().update(instance, validated_data)
+
+
+class AccountUserSerializer(serializers.ModelSerializer):
+    role = serializers.CharField(source="profile.role", read_only=True)
+    studio_id = serializers.IntegerField(source="profile.studio_id", read_only=True)
+    tattooer_id = serializers.IntegerField(source="profile.tattooer_id", read_only=True)
+
+    class Meta:
+        model = User
+        fields = [
+            "id",
+            "name",
+            "email",
+            "role",
+            "is_active",
+            "studio_id",
+            "tattooer_id",
+        ]
+        read_only_fields = ["id", "email", "role", "studio_id", "tattooer_id"]
+
+    name = serializers.CharField(source="first_name", required=False)
+
+    def update(self, instance, validated_data):
+        first_name = validated_data.pop("first_name", None)
+        if first_name is not None:
+            instance.first_name = first_name
+        is_active = validated_data.get("is_active")
+        if is_active is False and instance.is_active:
+            if account_user_has_blocking_appointments(instance):
+                raise serializers.ValidationError(
+                    {
+                        "is_active": (
+                            "Nao e possivel inativar usuario com agendamentos "
+                            "que nao estejam cancelados."
+                        )
+                    }
+                )
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        return instance
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["name"] = instance.first_name or instance.username
+        return data
+
+
+class ClientPortfolioImageSerializer(serializers.ModelSerializer):
+    MAX_IMAGE_BYTES = 5 * 1024 * 1024
+    image_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ClientPortfolioImage
+        fields = ["id", "client", "image", "image_url", "caption", "created_at"]
+        read_only_fields = ["id", "image_url", "created_at"]
+        extra_kwargs = {"image": {"required": True}}
+
+    def get_image_url(self, obj):
+        if not obj.image:
+            return None
+        request = self.context.get("request")
+        url = obj.image.url
+        if request:
+            return request.build_absolute_uri(url)
+        return url
+
+    def validate_image(self, value):
+        try:
+            validate_uploaded_image(value)
+        except ServiceValidationError as exc:
+            raise service_error_to_drf(exc) from exc
+        return value
 
 
 class ClientBriefSerializer(serializers.ModelSerializer):
@@ -131,6 +241,10 @@ class AppointmentReadSerializer(serializers.ModelSerializer):
             "reference_image",
             "health_summary",
             "health_snapshot",
+            "budget_amount",
+            "budget_currency",
+            "budget_notes",
+            "budget_sent_at",
             "created_at",
             "updated_at",
         ]
@@ -163,17 +277,12 @@ class AppointmentReadSerializer(serializers.ModelSerializer):
         }
 
 
-AGENDA_FIELD_NAMES = frozenset(
-    {
-        "scheduled_at",
-        "description",
-        "appointment_kind",
-        "tattooer",
-        "client",
-        "reference_image",
-        "duration_minutes",
-    }
-)
+class AppointmentBudgetSerializer(serializers.Serializer):
+    """Corpo de POST/PATCH /api/appointments/{id}/budget/."""
+
+    budget_amount = serializers.DecimalField(max_digits=10, decimal_places=2)
+    budget_notes = serializers.CharField(required=False, allow_blank=True, default="")
+    move_to_waiting_budget = serializers.BooleanField(required=False, default=True)
 
 
 class AppointmentSerializer(serializers.ModelSerializer):
@@ -192,10 +301,23 @@ class AppointmentSerializer(serializers.ModelSerializer):
             "duration_minutes",
             "reference_image",
             "health_snapshot",
+            "budget_amount",
+            "budget_currency",
+            "budget_notes",
+            "budget_sent_at",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "health_snapshot", "created_at", "updated_at"]
+        read_only_fields = [
+            "id",
+            "health_snapshot",
+            "budget_amount",
+            "budget_currency",
+            "budget_notes",
+            "budget_sent_at",
+            "created_at",
+            "updated_at",
+        ]
         extra_kwargs = {
             "reference_image": {"required": False},
             "description": {"required": False},
@@ -210,9 +332,11 @@ class AppointmentSerializer(serializers.ModelSerializer):
             self.fields["client"].required = False
 
     def create(self, validated_data):
-        client = validated_data.get("client")
-        if client is not None and not validated_data.get("health_snapshot"):
-            validated_data["health_snapshot"] = build_health_snapshot(client)
+        request = self.context.get("request")
+        try:
+            validated_data = prepare_appointment_create(validated_data, request)
+        except ServiceValidationError as exc:
+            raise service_error_to_drf(exc) from exc
         return super().create(validated_data)
 
     def update(self, instance, validated_data):
@@ -229,82 +353,17 @@ class AppointmentSerializer(serializers.ModelSerializer):
     def validate_reference_image(self, value):
         if not value:
             return value
-        if value.size > self.MAX_IMAGE_BYTES:
-            raise serializers.ValidationError("Arquivo muito grande (maximo 5MB).")
-        ctype = getattr(value, "content_type", "") or ""
-        if ctype and ctype not in {"image/jpeg", "image/png", "image/webp"}:
-            raise serializers.ValidationError("Formato aceito: JPEG, PNG ou WebP.")
+        try:
+            validate_uploaded_image(value, "reference_image")
+        except ServiceValidationError as exc:
+            raise service_error_to_drf(exc) from exc
         return value
 
     def validate(self, attrs):
-        request = self.context.get("request")
-        if (
-            request
-            and self.instance
-            and not self.context.get("applying_change_request_accept")
-        ):
-            role = get_user_role(request.user)
-            if role in (UserProfile.ROLE_CLIENT, UserProfile.ROLE_TATTOOER):
-                touched = AGENDA_FIELD_NAMES.intersection(attrs.keys())
-                if touched:
-                    raise serializers.ValidationError(
-                        {
-                            k: (
-                                "Alteracao sujeita a aceite: envie uma solicitacao em "
-                                "/api/appointment-change-requests/."
-                            )
-                            for k in sorted(touched)
-                        }
-                    )
-
-        if self.instance and "status" in attrs:
-            next_status = attrs["status"]
-            if not Appointment.can_transition(self.instance.status, next_status):
-                raise serializers.ValidationError(
-                    {
-                        "status": (
-                            f"Transicao invalida de '{self.instance.status}' "
-                            f"para '{next_status}'."
-                        )
-                    }
-                )
-
-        tattooer = attrs.get("tattooer", getattr(self.instance, "tattooer", None))
-        scheduled_at = attrs.get("scheduled_at", getattr(self.instance, "scheduled_at", None))
-        duration = attrs.get("duration_minutes", getattr(self.instance, "duration_minutes", None))
-        if duration is None:
-            duration = 60
-
-        if tattooer is not None and scheduled_at is not None:
-            try:
-                validate_scheduled_within_studio_hours(scheduled_at)
-            except ValueError as exc:
-                raise serializers.ValidationError({"scheduled_at": str(exc)}) from exc
-
-        if tattooer is None or scheduled_at is None:
-            return attrs
-
-        conflict_query = Appointment.objects.filter(tattooer=tattooer).exclude(
-            status=Appointment.STATUS_CANCELLED
-        )
-        if self.instance:
-            conflict_query = conflict_query.exclude(pk=self.instance.pk)
-
-        for other in conflict_query.only("scheduled_at", "duration_minutes"):
-            od = other.duration_minutes or 60
-            if appointment_intervals_overlap(
-                scheduled_at, duration, other.scheduled_at, od
-            ):
-                raise serializers.ValidationError(
-                    {
-                        "scheduled_at": (
-                            "Conflito de horario com outra sessao deste tatuador "
-                            "(intervalos sobrepostos)."
-                        )
-                    }
-                )
-
-        return attrs
+        try:
+            return validate_appointment_write(attrs, self.instance, self.context)
+        except ServiceValidationError as exc:
+            raise service_error_to_drf(exc) from exc
 
 
 class ClientHealthFormSerializer(serializers.ModelSerializer):
@@ -329,23 +388,28 @@ class ClientHealthFormSerializer(serializers.ModelSerializer):
             self.fields["client"].required = False
 
 
+class StudioSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Studio
+        fields = ["id", "name", "is_active", "created_at"]
+        read_only_fields = ["id", "created_at"]
+
+
 class StudioSettingsSerializer(serializers.ModelSerializer):
+    studio_id = serializers.IntegerField(source="studio.id", read_only=True)
+    studio_name = serializers.CharField(source="studio.name", read_only=True)
+
     class Meta:
         model = StudioSettings
-        fields = ["id", "opens_at", "closes_at"]
-        read_only_fields = ["id"]
-
-
-CHANGE_REQUEST_ALLOWED_KEYS = frozenset(
-    {
-        "scheduled_at",
-        "description",
-        "appointment_kind",
-        "tattooer",
-        "clear_reference_image",
-        "duration_minutes",
-    }
-)
+        fields = [
+            "id",
+            "studio_id",
+            "studio_name",
+            "opens_at",
+            "closes_at",
+            "offers_consultation",
+        ]
+        read_only_fields = ["id", "studio_id", "studio_name"]
 
 
 class AppointmentChangeRequestSerializer(serializers.ModelSerializer):
@@ -450,103 +514,10 @@ class AppointmentChangeRequestSerializer(serializers.ModelSerializer):
         return appointment
 
     def validate(self, attrs):
-        appointment = attrs.get("appointment") or getattr(self.instance, "appointment", None)
-        if appointment is None:
-            raise serializers.ValidationError({"appointment": "Obrigatorio."})
-
-        changes = dict(attrs.pop("proposed_changes", {}) or {})
-        legacy_dt = attrs.pop("proposed_scheduled_at", None)
-        if legacy_dt is not None:
-            changes["scheduled_at"] = legacy_dt.isoformat()
-
-        unknown = set(changes.keys()) - CHANGE_REQUEST_ALLOWED_KEYS
-        if unknown:
-            raise serializers.ValidationError(
-                {"proposed_changes": f"Campos nao permitidos: {', '.join(sorted(unknown))}."}
-            )
-
-        ref_file = attrs.get("proposed_reference_image")
-        if not changes and not ref_file:
-            raise serializers.ValidationError(
-                {"proposed_changes": "Informe alteracoes ou envie uma nova imagem de referencia."}
-            )
-
-        if "tattooer" in changes:
-            try:
-                tid = int(changes["tattooer"])
-            except (TypeError, ValueError) as exc:
-                raise serializers.ValidationError(
-                    {"proposed_changes": "tattooer deve ser um id numerico."}
-                ) from exc
-            if not Tattooer.objects.filter(pk=tid).exists():
-                raise serializers.ValidationError({"proposed_changes": "Tatuador invalido."})
-
-        if "appointment_kind" in changes:
-            if changes["appointment_kind"] not in (
-                Appointment.KIND_SERVICE,
-                Appointment.KIND_CONSULTATION,
-            ):
-                raise serializers.ValidationError({"proposed_changes": "Modalidade invalida."})
-
-        if "duration_minutes" in changes:
-            try:
-                dm = int(changes["duration_minutes"])
-            except (TypeError, ValueError) as exc:
-                raise serializers.ValidationError(
-                    {"proposed_changes": "duration_minutes invalido."}
-                ) from exc
-            if dm < 15 or dm > 480:
-                raise serializers.ValidationError(
-                    {"proposed_changes": "Duracao deve estar entre 15 e 480 minutos."}
-                )
-
-        if "clear_reference_image" in changes:
-            changes["clear_reference_image"] = str(changes["clear_reference_image"]).lower() in (
-                "1",
-                "true",
-                "yes",
-            )
-
-        scheduled_at = None
-        if "scheduled_at" in changes:
-            scheduled_at = parse_datetime(str(changes["scheduled_at"]))
-            if scheduled_at is None:
-                raise serializers.ValidationError(
-                    {"proposed_changes": "scheduled_at invalido (use ISO 8601)."}
-                )
-            try:
-                validate_scheduled_within_studio_hours(scheduled_at)
-            except ValueError as exc:
-                raise serializers.ValidationError({"proposed_changes": str(exc)}) from exc
-
-        tattooer_pk = int(changes["tattooer"]) if "tattooer" in changes else appointment.tattooer_id
-        duration = int(changes["duration_minutes"]) if "duration_minutes" in changes else (
-            appointment.duration_minutes or 60
-        )
-        start = scheduled_at if scheduled_at is not None else appointment.scheduled_at
-
-        conflict_qs = (
-            Appointment.objects.filter(tattooer_id=tattooer_pk)
-            .exclude(status=Appointment.STATUS_CANCELLED)
-            .exclude(pk=appointment.pk)
-            .only("scheduled_at", "duration_minutes")
-        )
-        for other in conflict_qs:
-            od = other.duration_minutes or 60
-            if appointment_intervals_overlap(start, duration, other.scheduled_at, od):
-                raise serializers.ValidationError(
-                    {
-                        "proposed_changes": (
-                            "Conflito de horario com outra sessao deste tatuador "
-                            "(intervalos sobrepostos)."
-                        )
-                    }
-                )
-
-        attrs["proposed_payload"] = changes
-        if scheduled_at is not None:
-            attrs["proposed_scheduled_at"] = scheduled_at
-        return attrs
+        try:
+            return validate_change_request_write(attrs, self.context)
+        except ServiceValidationError as exc:
+            raise service_error_to_drf(exc) from exc
 
 
 class InAppNotificationSerializer(serializers.ModelSerializer):

@@ -1,3 +1,11 @@
+"""
+Configuracao Django do InkControl.
+
+- DB: Postgres se POSTGRES_DB no .env; senao SQLite em backend/db.sqlite3.
+- API: DRF com token + inatividade (RNF05); middleware de assinatura (HU16) e tempo (RNF01).
+- Midia: local em MEDIA_ROOT; com AWS_STORAGE_BUCKET_NAME usa Cloudflare R2 (S3 API).
+"""
+
 import os
 from pathlib import Path
 
@@ -41,6 +49,7 @@ MIDDLEWARE = [
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     "studio.middleware.subscription_gate.SubscriptionGateMiddleware",
+    "studio.middleware.response_time.ResponseTimeMiddleware",
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -137,7 +146,7 @@ SUBSCRIPTION_GATE_ENABLED = os.environ.get("SUBSCRIPTION_GATE_ENABLED", "true").
 )
 SUBSCRIPTION_BILLING_PERIOD_DAYS = int(os.environ.get("SUBSCRIPTION_BILLING_PERIOD_DAYS", "30"))
 
-# Imagens de agendamento no R2/S3 em vez de MEDIA_ROOT quando o bucket esta no .env.
+# Producao (R2/S3): defina AWS_* no .env — imagens de agendamento e portfolio vao ao bucket.
 if os.environ.get("AWS_STORAGE_BUCKET_NAME"):
     INSTALLED_APPS = list(INSTALLED_APPS) + ["storages"]
     STORAGES = {
@@ -154,6 +163,16 @@ if os.environ.get("AWS_STORAGE_BUCKET_NAME"):
     AWS_S3_ENDPOINT_URL = os.environ.get("AWS_S3_ENDPOINT_URL", "")
     AWS_S3_REGION_NAME = os.environ.get("AWS_S3_REGION_NAME", "auto")
     AWS_S3_ADDRESSING_STYLE = os.environ.get("AWS_S3_ADDRESSING_STYLE", "virtual")
+    AWS_DEFAULT_ACL = os.environ.get("AWS_DEFAULT_ACL", "private")
+    AWS_QUERYSTRING_AUTH = os.environ.get("AWS_QUERYSTRING_AUTH", "true").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    AWS_S3_FILE_OVERWRITE = False
+
+# RNF01: limite alvo de resposta da API principal (ms), usado em testes.
+API_RESPONSE_TIME_BUDGET_MS = int(os.environ.get("API_RESPONSE_TIME_BUDGET_MS", "2000"))
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
@@ -166,9 +185,20 @@ CORS_ALLOWED_ORIGINS = [
     if o.strip()
 ]
 
+ENABLE_EMAIL_SCHEDULER = os.environ.get("ENABLE_EMAIL_SCHEDULER", "").lower() in (
+    "1",
+    "true",
+    "yes",
+)
+SCHEDULER_INTERVAL_MINUTES = int(os.environ.get("SCHEDULER_INTERVAL_MINUTES", "5"))
+
+TOKEN_INACTIVITY_MINUTES = int(os.environ.get("TOKEN_INACTIVITY_MINUTES", "30"))
+LOGIN_MAX_FAILED_ATTEMPTS = int(os.environ.get("LOGIN_MAX_FAILED_ATTEMPTS", "5"))
+LOGIN_LOCKOUT_MINUTES = int(os.environ.get("LOGIN_LOCKOUT_MINUTES", "15"))
+
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        "rest_framework.authentication.TokenAuthentication",
+        "studio.features.auth.token_activity.InactivityTokenAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
     "DEFAULT_RENDERER_CLASSES": [

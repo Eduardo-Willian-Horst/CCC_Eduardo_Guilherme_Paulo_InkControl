@@ -1,4 +1,7 @@
+"""Gera token de reset e envia link por e-mail (FRONTEND_PASSWORD_RESET_URL)."""
+
 from django.conf import settings
+
 from django.contrib.auth.models import User
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.utils.encoding import force_bytes, force_str

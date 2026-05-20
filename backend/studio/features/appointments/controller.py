@@ -1,3 +1,9 @@
+"""
+Agendamentos e solicitacoes de alteracao (change-request).
+
+Escopo por papel via user_appointment_scope_queryset; e-mails em create/cancel/accept/reject.
+"""
+
 from datetime import datetime, time, timedelta
 
 from django.db import transaction
@@ -21,15 +27,21 @@ from studio.models import (
 )
 from studio.permissions import RoleByActionPermission, get_user_role
 from studio.serializers import (
+    AppointmentBudgetSerializer,
     AppointmentChangeRequestSerializer,
     AppointmentReadSerializer,
     AppointmentSerializer,
 )
+from studio.services.appointment_service import service_error_to_drf
+from studio.services.budget_service import submit_or_update_budget
+from studio.services.exceptions import ServiceValidationError
 
 from studio.features.auth.utils import get_or_create_client_for_app_user
 from studio.features.notifications.appointment_mail_events import (
     notify_appointment_cancelled,
     notify_appointment_created,
+    notify_change_request_accepted,
+    notify_change_request_rejected,
 )
 
 
@@ -65,6 +77,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             UserProfile.ROLE_TATTOOER,
             UserProfile.ROLE_CLIENT,
         },
+        "budget": {UserProfile.ROLE_STUDIO, UserProfile.ROLE_TATTOOER},
     }
 
     def get_serializer_class(self):
@@ -107,8 +120,40 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         serializer = AppointmentReadSerializer(appointment, context={"request": request})
         return Response(serializer.data)
 
+    @action(detail=True, methods=["get", "post", "patch"], url_path="budget")
+    def budget(self, request, pk=None):
+        """Orcamento da sessao (waiting_budget): GET leitura; POST/PATCH envio pelo estudio/tatuador."""
+        appointment = self.get_object()
+        if request.method == "GET":
+            return Response(
+                {
+                    "budget_amount": appointment.budget_amount,
+                    "budget_currency": appointment.budget_currency,
+                    "budget_notes": appointment.budget_notes,
+                    "budget_sent_at": appointment.budget_sent_at,
+                    "status": appointment.status,
+                }
+            )
+        ser = AppointmentBudgetSerializer(data=request.data, partial=request.method == "PATCH")
+        ser.is_valid(raise_exception=True)
+        try:
+            appointment = submit_or_update_budget(
+                appointment,
+                request.user,
+                amount=ser.validated_data["budget_amount"],
+                notes=ser.validated_data.get("budget_notes", ""),
+                move_to_waiting_budget=ser.validated_data.get("move_to_waiting_budget", True),
+            )
+        except ServiceValidationError as exc:
+            raise service_error_to_drf(exc)
+        out = AppointmentReadSerializer(appointment, context={"request": request})
+        return Response(out.data)
+
     def get_queryset(self):
-        queryset = super().get_queryset()
+        # Base: regra central de visibilidade (studio / tatuador / cliente).
+        queryset = user_appointment_scope_queryset(self.request.user).select_related(
+            "client", "tattooer", "client__health_form"
+        )
         q = self.request.query_params.get("q")
         status_filter = self.request.query_params.get("status")
         tattooer_filter = self.request.query_params.get("tattooer")
@@ -178,22 +223,6 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                 start_dt = timezone.make_aware(datetime.combine(start_date, time.min), tz)
                 end_dt = timezone.make_aware(datetime.combine(end_date, time.min), tz)
                 queryset = queryset.filter(scheduled_at__gte=start_dt, scheduled_at__lt=end_dt)
-
-        role = get_user_role(self.request.user)
-        if role == UserProfile.ROLE_TATTOOER:
-            profile, _ = UserProfile.objects.select_related("tattooer").get_or_create(
-                user=self.request.user
-            )
-            if not profile.tattooer_id:
-                queryset = queryset.none()
-            else:
-                queryset = queryset.filter(tattooer_id=profile.tattooer_id)
-        elif role == UserProfile.ROLE_CLIENT:
-            email = (self.request.user.email or "").strip()
-            if email:
-                queryset = queryset.filter(client__email__iexact=email)
-            else:
-                queryset = queryset.none()
 
         return queryset
 
@@ -269,6 +298,7 @@ class AppointmentChangeRequestViewSet(viewsets.ModelViewSet):
         appt = Appointment.objects.select_related("client", "tattooer", "client__health_form").get(
             pk=appt_id
         )
+        notify_change_request_accepted(appt)
         out = AppointmentReadSerializer(appt, context={"request": request})
         return Response({"appointment": out.data, "change_request": {"id": cr.id, "status": cr.status}})
 
@@ -282,6 +312,8 @@ class AppointmentChangeRequestViewSet(viewsets.ModelViewSet):
             )
         cr.status = AppointmentChangeRequest.STATUS_REJECTED
         cr.save(update_fields=["status", "updated_at"])
+        appt = cr.appointment
+        notify_change_request_rejected(appt)
         return Response(
             AppointmentChangeRequestSerializer(cr, context={"request": request}).data
         )

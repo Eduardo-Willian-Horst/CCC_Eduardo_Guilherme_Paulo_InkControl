@@ -1,8 +1,46 @@
+"""
+Modelos de dominio do InkControl.
+
+Papeis (UserProfile.role): studio, tattooer, client.
+Agendamento (Appointment): maquina de status + studio (tenant) + snapshot de saude (HU06).
+Configuracao e cobranca por estudio: StudioSettings / StudioBilling (OneToOne com Studio).
+"""
+
 from datetime import time, timedelta
 
 from django.contrib.auth.models import User
 from django.db import models
 from django.utils import timezone
+from rest_framework.authtoken.models import Token
+
+
+class Studio(models.Model):
+    """Tenant: cada estudio de tatuagem no sistema (multi-estudio)."""
+    name = models.CharField(max_length=120)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class TokenActivity(models.Model):
+    """RNF05: ultima atividade do token; inatividade apaga o token na proxima requisicao."""
+    token = models.OneToOneField(
+        Token,
+        on_delete=models.CASCADE,
+        related_name="activity",
+    )
+    last_activity = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        verbose_name_plural = "Token activities"
+
+    def __str__(self) -> str:
+        return f"Atividade token {self.token_id}"
 
 
 class UserProfile(models.Model):
@@ -24,12 +62,28 @@ class UserProfile(models.Model):
         on_delete=models.SET_NULL,
         related_name="linked_profiles",
     )
+    studio = models.ForeignKey(
+        Studio,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="profiles",
+    )
+    failed_login_count = models.PositiveSmallIntegerField(default=0)
+    login_locked_until = models.DateTimeField(null=True, blank=True)
 
     def __str__(self) -> str:
         return f"{self.user.email or self.user.username} ({self.role})"
 
 
 class Client(models.Model):
+    """Cadastro operacional do cliente (pode existir sem conta de login)."""
+
+    studio = models.ForeignKey(
+        Studio,
+        on_delete=models.PROTECT,
+        related_name="clients",
+    )
     name = models.CharField(max_length=120)
     phone = models.CharField(max_length=20)
     email = models.EmailField(unique=True)
@@ -44,10 +98,34 @@ class Client(models.Model):
         return self.name
 
 
+class ClientPortfolioImage(models.Model):
+    client = models.ForeignKey(
+        "Client",
+        on_delete=models.CASCADE,
+        related_name="portfolio_images",
+    )
+    image = models.ImageField(upload_to="client_portfolio/")
+    caption = models.CharField(max_length=200, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"Portfolio cliente {self.client_id} #{self.pk}"
+
+
 class Tattooer(models.Model):
     name = models.CharField(max_length=120)
     artistic_style = models.CharField(max_length=120)
     contact = models.CharField(max_length=120)
+    studio = models.ForeignKey(
+        Studio,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="tattooers",
+    )
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -90,6 +168,13 @@ class Appointment(models.Model):
         on_delete=models.PROTECT,
         related_name="appointments",
     )
+    studio = models.ForeignKey(
+        Studio,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="appointments",
+    )
     scheduled_at = models.DateTimeField()
     description = models.TextField(blank=True)
     status = models.CharField(
@@ -114,6 +199,23 @@ class Appointment(models.Model):
         blank=True,
     )
     duration_minutes = models.PositiveSmallIntegerField(default=60)
+    # Orcamento (fluxo waiting_budget): enviado pelo estudio/tatuador ao cliente.
+    budget_amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
+    budget_currency = models.CharField(max_length=3, default="BRL")
+    budget_notes = models.TextField(blank=True)
+    budget_sent_at = models.DateTimeField(null=True, blank=True)
+    budget_sent_by = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="budgets_sent",
+    )
     # HU06: copia imutavel da ficha no create; alteracoes futuras na ficha nao mudam o historico.
     health_snapshot = models.JSONField(default=dict, blank=True)
     reminder_email_sent_at = models.DateTimeField(null=True, blank=True)
@@ -154,23 +256,31 @@ class ClientHealthForm(models.Model):
 
 
 class StudioSettings(models.Model):
+    studio = models.OneToOneField(
+        Studio,
+        on_delete=models.CASCADE,
+        related_name="settings",
+    )
     opens_at = models.TimeField(default=time(9, 0))
     closes_at = models.TimeField(default=time(18, 0))
+    offers_consultation = models.BooleanField(
+        default=False,
+        help_text="HU12: permite agendar avaliacao antes do servico.",
+    )
 
     class Meta:
         verbose_name_plural = "Studio settings"
 
     def __str__(self) -> str:
-        return f"Expediente {self.opens_at}–{self.closes_at}"
-
-    @classmethod
-    def get_solo(cls):
-        # Um registro fixo (pk=1) = expediente global do estudio.
-        obj, _ = cls.objects.get_or_create(pk=1)
-        return obj
+        return f"Expediente {self.studio.name} {self.opens_at}–{self.closes_at}"
 
 
 class StudioBilling(models.Model):
+    studio = models.OneToOneField(
+        Studio,
+        on_delete=models.CASCADE,
+        related_name="billing",
+    )
     paid_until = models.DateTimeField()
     payment_cancelled_at = models.DateTimeField(null=True, blank=True)
     last_payment_attempt_at = models.DateTimeField(null=True, blank=True)
@@ -182,16 +292,7 @@ class StudioBilling(models.Model):
         verbose_name_plural = "Studio billing"
 
     def __str__(self) -> str:
-        return f"Mensalidade ate {self.paid_until}"
-
-    @classmethod
-    def get_solo(cls):
-        # Um registro fixo (pk=1) = mensalidade do InkControl para o estudio (HU16).
-        obj, created = cls.objects.get_or_create(
-            pk=1,
-            defaults={"paid_until": timezone.now() + timedelta(days=3650)},
-        )
-        return obj
+        return f"Mensalidade {self.studio.name} ate {self.paid_until}"
 
     def is_access_allowed(self, at=None) -> bool:
         at = at or timezone.now()

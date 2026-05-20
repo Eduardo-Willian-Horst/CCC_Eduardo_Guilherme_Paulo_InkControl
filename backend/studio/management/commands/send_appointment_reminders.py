@@ -1,4 +1,7 @@
+"""HU18: e-mail ~30 min antes do horario agendado (janela configuravel no comando)."""
+
 from datetime import timedelta
+
 
 from django.core.management.base import BaseCommand
 from django.utils import timezone

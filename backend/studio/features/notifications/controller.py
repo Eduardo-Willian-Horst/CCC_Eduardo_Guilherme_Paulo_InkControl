@@ -1,4 +1,7 @@
+"""Notificacoes in-app (lista e marcar como lida) por usuario autenticado."""
+
 from rest_framework import permissions, viewsets
+
 
 from studio.models import InAppNotification, UserProfile
 from studio.permissions import RoleByActionPermission

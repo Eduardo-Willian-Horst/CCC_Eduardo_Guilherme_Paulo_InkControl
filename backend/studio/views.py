@@ -1,3 +1,7 @@
+"""
+Re-export legado para imports antigos. Rotas canonicas: studio/urls.py.
+"""
+
 from studio.features.appointments.controller import (
     AppointmentChangeRequestViewSet,
     AppointmentViewSet,

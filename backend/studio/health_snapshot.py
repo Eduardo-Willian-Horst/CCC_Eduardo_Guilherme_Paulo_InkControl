@@ -1,3 +1,5 @@
+"""HU06: copia imutavel da ficha de saude no momento do agendamento."""
+
 from django.utils import timezone
 
 from studio.models import Client

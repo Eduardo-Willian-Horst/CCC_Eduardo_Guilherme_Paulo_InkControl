@@ -1,4 +1,7 @@
+"""API de recuperacao de senha (request + confirm) com throttle para anonimos."""
+
 from rest_framework import permissions, serializers, status
+
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import APIView

@@ -1,3 +1,5 @@
+"""Envio de e-mail transacional (SMTP ou console em dev)."""
+
 import logging
 
 from django.conf import settings

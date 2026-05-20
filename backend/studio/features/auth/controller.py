@@ -1,7 +1,12 @@
+"""
+Autenticacao: registro, login (RNF05/RNF06), me, logout, vinculo tatuador.
+
+Tokens com expiracao por inatividade; bloqueio apos tentativas invalidas.
+"""
+
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
 from rest_framework import permissions, status
-from rest_framework.authtoken.models import Token
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import APIView
@@ -10,6 +15,8 @@ from studio.models import Tattooer, UserProfile
 from studio.permissions import get_user_role
 from studio.serializers import LoginSerializer, RegisterSerializer
 
+from .login_guard import is_login_locked, record_failed_login, reset_login_attempts
+from .token_activity import issue_token_for_user
 from .utils import get_or_create_client_for_app_user, serialize_auth_user
 
 
@@ -29,7 +36,7 @@ class RegisterView(APIView):
         serializer = RegisterSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
-        token, _ = Token.objects.get_or_create(user=user)
+        token = issue_token_for_user(user)
         return Response(
             {
                 "token": token.key,
@@ -58,14 +65,27 @@ class LoginView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        user = authenticate(username=user_obj.username, password=password)
-        if user is None:
+        if not user_obj.is_active:
             return Response(
-                {"detail": "Credenciais invalidas."},
+                {"detail": "Conta inativa. Contate o estudio."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        token, _ = Token.objects.get_or_create(user=user)
+        locked, lock_msg = is_login_locked(user_obj)
+        if locked:
+            return Response({"detail": lock_msg}, status=status.HTTP_400_BAD_REQUEST)
+
+        user = authenticate(username=user_obj.username, password=password)
+        if user is None:
+            lock_detail = record_failed_login(user_obj)
+            detail = lock_detail or "Credenciais invalidas."
+            return Response(
+                {"detail": detail},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        reset_login_attempts(user)
+        token = issue_token_for_user(user)
         UserProfile.objects.get_or_create(user=user)
         return Response(
             {
@@ -128,7 +148,16 @@ class LinkTattooerProfileView(APIView):
                 {"detail": "O usuario precisa ter papel tatuador."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        from studio.studio_scope import get_user_studio_id
+
+        if tattooer.studio_id and tattooer.studio_id != get_user_studio_id(request.user):
+            return Response(
+                {"detail": "Tatuador pertence a outro estudio."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         profile.tattooer = tattooer
+        if tattooer.studio_id and not profile.studio_id:
+            profile.studio_id = tattooer.studio_id
         profile.save()
         return Response({"user": serialize_auth_user(target)})
 
@@ -137,6 +166,8 @@ class LogoutView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
+        from rest_framework.authtoken.models import Token
+
         Token.objects.filter(user=request.user).delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 

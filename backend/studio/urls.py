@@ -1,3 +1,7 @@
+"""
+Rotas da API REST (/api/...). Organizacao por feature em studio/features/.
+"""
+
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
@@ -20,6 +24,7 @@ from studio.features.clients.controller import ClientViewSet
 from studio.features.common.health_controller import health
 from studio.features.health_forms.controller import ClientHealthFormViewSet
 from studio.features.notifications.controller import InAppNotificationViewSet
+from studio.features.studio_org.studio_controller import RegisterStudioView, StudioViewSet
 from studio.features.studio_org.studio_settings_controller import StudioSettingsView
 from studio.features.studio_org.subscription_controller import (
     StudioSubscriptionCancelView,
@@ -27,7 +32,10 @@ from studio.features.studio_org.subscription_controller import (
     StudioSubscriptionStatusView,
 )
 from studio.features.tattooers.controller import TattooerViewSet
+from studio.features.users.controller import AccountUserViewSet, SystemUserListView
+from studio.features.portfolio.controller import ClientPortfolioImageViewSet
 
+# --- ViewSets (CRUD paginado) ---
 router = DefaultRouter()
 router.register("clients", ClientViewSet, basename="client")
 router.register("tattooers", TattooerViewSet, basename="tattooer")
@@ -39,9 +47,15 @@ router.register(
 )
 router.register("notifications", InAppNotificationViewSet, basename="notification")
 router.register("health-forms", ClientHealthFormViewSet, basename="health-form")
+router.register("portfolio-images", ClientPortfolioImageViewSet, basename="portfolio-image")
+router.register("accounts", AccountUserViewSet, basename="account")
+router.register("studios", StudioViewSet, basename="studio")
 
+# --- Rotas avulsas: auth, tenant, assinatura ---
 urlpatterns = [
     path("health/", health, name="health"),
+    path("studios/register/", RegisterStudioView.as_view(), name="studio-register"),
+    path("system-users/", SystemUserListView.as_view(), name="system-users"),
     path("auth/register/", RegisterView.as_view(), name="register"),
     path("auth/login/", LoginView.as_view(), name="login"),
     path("auth/me/", MeView.as_view(), name="me"),

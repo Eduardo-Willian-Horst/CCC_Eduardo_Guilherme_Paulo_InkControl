@@ -1,3 +1,7 @@
+"""
+RBAC por acao: cada ViewSet define role_permissions = { action: set(roles) }.
+"""
+
 from .models import UserProfile
 from rest_framework.permissions import BasePermission
 

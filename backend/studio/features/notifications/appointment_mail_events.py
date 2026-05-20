@@ -1,3 +1,9 @@
+"""
+E-mails transacionais de agendamento (HU19).
+
+Envio via transaction.on_commit para nao notificar operacoes revertidas.
+"""
+
 from django.db import transaction
 
 from studio.features.notifications.appointment_email import recipient_emails_for_appointment
@@ -53,3 +59,17 @@ def notify_change_request_email_summary(appointment, summary: str) -> None:
         f"{summary}\n"
     )
     _schedule_email(subject, body, recipient_emails_for_appointment(appointment))
+
+
+def notify_change_request_accepted(appointment) -> None:
+    notify_change_request_email_summary(
+        appointment,
+        "A solicitacao de alteracao foi ACEITA e o agendamento foi atualizado.",
+    )
+
+
+def notify_change_request_rejected(appointment) -> None:
+    notify_change_request_email_summary(
+        appointment,
+        "A solicitacao de alteracao foi RECUSADA. O horario anterior permanece.",
+    )

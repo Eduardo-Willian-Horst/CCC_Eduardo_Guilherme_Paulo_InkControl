@@ -1,7 +1,14 @@
+"""
+Ficha de saude do cliente (HU06).
+
+Leitura/escrita filtrada por studio_scope: estudio/tatuador so veem clientes ja atendidos.
+"""
+
 from django.db.models import Q
 from rest_framework import permissions, viewsets
 
 from studio.models import ClientHealthForm, UserProfile
+from studio.studio_scope import filter_health_forms_by_studio_access
 from studio.permissions import RoleByActionPermission, get_user_role
 from studio.serializers import ClientHealthFormSerializer
 
@@ -69,16 +76,13 @@ class ClientHealthFormViewSet(viewsets.ModelViewSet):
             email = (self.request.user.email or "").strip()
             if email:
                 queryset = queryset.filter(client__email__iexact=email)
-        elif get_user_role(self.request.user) == UserProfile.ROLE_TATTOOER:
-            profile, _ = UserProfile.objects.select_related("tattooer").get_or_create(
-                user=self.request.user
+        elif get_user_role(self.request.user) in (
+            UserProfile.ROLE_TATTOOER,
+            UserProfile.ROLE_STUDIO,
+        ):
+            queryset = filter_health_forms_by_studio_access(
+                queryset, self.request.user
             )
-            if profile.tattooer_id:
-                queryset = queryset.filter(
-                    client__appointments__tattooer_id=profile.tattooer_id
-                ).distinct()
-            else:
-                queryset = queryset.none()
         return queryset
 
 

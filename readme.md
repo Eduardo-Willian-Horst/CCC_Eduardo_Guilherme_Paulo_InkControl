@@ -46,8 +46,6 @@ cd backend
 ..\.venv\Scripts\python.exe manage.py runserver
 ```
 
-(O `python` acima está no venv da raiz do repositório: `InkControl\.venv`.)
-
 ### 5. Front-end (Vite)
 
 Em outro terminal:
@@ -60,99 +58,114 @@ npm run dev
 
 Abra [http://localhost:5173](http://localhost:5173). O Vite encaminha `/api` para `http://127.0.0.1:8000`.
 
-Teste direto da API: [http://127.0.0.1:8000/api/health/](http://127.0.0.1:8000/api/health/)
+## API principal
 
-## Endpoints iniciais
+### Autenticação
 
-- `POST /api/auth/register/` cria usuario e retorna token
-- `POST /api/auth/login/` login por e-mail/senha e retorna token
-- `GET /api/auth/me/` dados do usuario autenticado
-- `POST /api/auth/logout/` invalida token atual
-- `GET/POST /api/clients/` lista/cria clientes
-- `GET/PUT/PATCH/DELETE /api/clients/{id}/` CRUD de cliente
-- `GET/POST /api/tattooers/` lista/cria tatuadores
-- `GET/PUT/PATCH/DELETE /api/tattooers/{id}/` CRUD de tatuador
-- `GET/POST /api/appointments/` lista/cria agendamentos
-- `GET/PUT/PATCH/DELETE /api/appointments/{id}/` CRUD de agendamento
-- `POST /api/appointments/{id}/cancel/` cancela o agendamento (transicao permitida)
-- `GET/PATCH /api/studio-settings/` expediente do estudio (PATCH apenas papel `studio`)
-- `POST /api/auth/link-tattooer-profile/` vincula usuario tatuador a um cadastro `Tattooer` (apenas `studio`; corpo `user_id`, `tattooer_id`)
-- `PATCH /api/auth/me/` tatuador pode enviar `tattooer` (id do cadastro ou vazio para limpar)
-- `GET/POST /api/appointment-change-requests/` listar e criar solicitacoes de alteracao (conteudo/agenda)
-- `POST /api/appointment-change-requests/{id}/accept/` aceita proposta e aplica no agendamento
-- `POST /api/appointment-change-requests/{id}/reject/` recusa proposta
-- `GET/PATCH /api/notifications/` notificacoes in-app do usuario autenticado
-- `GET/POST /api/health-forms/` lista/cria formulario de saude do cliente
-- `GET/PUT/PATCH/DELETE /api/health-forms/{id}/` CRUD do formulario de saude
+- `POST /api/auth/register/` — cliente/tatuador (vinculado ao estúdio padrão)
+- `POST /api/studios/register/` — **novo estúdio** (tenant) + administrador
+- `POST /api/auth/login/` · `GET /api/auth/me/` · `POST /api/auth/logout/`
+- Recuperação de senha: `POST /api/auth/password-reset/request/` e `confirm/`
 
-Alteracoes de conteudo/agenda (data/hora, descricao, modalidade, tatuador, imagem de referencia, duracao) por **cliente** ou **tatuador** devem ir em `POST /api/appointment-change-requests/` com `proposed_changes` (JSON) e opcionalmente `proposed_reference_image` (multipart). O **estudio** continua podendo editar agendamentos diretamente com `PUT/PATCH`. Transicoes de **status** e **cancelamento** permanecem diretas na API de agendamentos.
+### Estúdio (multi-tenant)
 
-Criacao de solicitacao (`proposed_changes`): chaves permitidas `scheduled_at` (ISO 8601), `description`, `appointment_kind` (`service`|`consultation`), `tattooer` (id), `clear_reference_image` (booleano), `duration_minutes` (15 a 480). Quem pode **aceitar/recusar** depende de quem pediu: pedido do **cliente** notifica estudio + tatuador vinculado; pedido do **tatuador** notifica estudio + cliente (usuario com e-mail do `Client`); pedido do **estudio** notifica tatuador vinculado + cliente.
+- `GET/PATCH /api/studios/{id}/` — dados do estúdio (admin do próprio tenant)
+- `GET/PATCH /api/studio-settings/?studio={id}` — expediente e **`offers_consultation`** (HU12)
+- `GET/POST /api/studio/subscription/` — mensalidade **por estúdio**
 
-Regra de conflito de horario:
+### Cadastros e agenda
 
-- cada agendamento tem `duration_minutes` (padrao 60); o sistema bloqueia **sobreposicao de intervalos** `[scheduled_at, scheduled_at + duration)` entre agendamentos do mesmo tatuador
-- agendamentos com status `cancelled` nao entram no bloqueio
+- CRUD `/api/clients/`, `/api/tattooers/`, `/api/appointments/`
+- `POST /api/appointments/{id}/cancel/`
+- `GET/POST /api/appointment-change-requests/` + `accept/` / `reject/`
+- `GET/POST /api/portfolio-images/?client=` — referências no perfil do cliente (RF04)
+- `GET /api/system-users/` — lista unificada (papel `studio`)
+- `GET/PATCH/DELETE /api/accounts/{id}/` — contas de login
 
-Comando de limpeza de imagens (apos 7 dias de `done`):
+### Segurança (RNF05 / RNF06)
 
-- `python manage.py purge_expired_appointment_reference_images`
+- Token expira após inatividade (`TOKEN_INACTIVITY_MINUTES`, padrão 30)
+- Bloqueio de login após tentativas inválidas (`LOGIN_MAX_FAILED_ATTEMPTS`, `LOGIN_LOCKOUT_MINUTES`)
 
-Filtros de agenda por periodo:
+### Avaliação
 
-- `GET /api/appointments/?period=day&date=YYYY-MM-DD`
-- `GET /api/appointments/?period=week&date=YYYY-MM-DD`
-- `GET /api/appointments/?period=month&date=YYYY-MM-DD`
-- se `date` nao for informado, usa a data atual
+- `offers_consultation` em `studio-settings` (PATCH pelo estúdio)
+- Agendamento com `appointment_kind=consultation` só é aceito se a flag estiver ativa
 
-Busca e filtros:
+### Ficha de saúde 
 
-- clientes: `GET /api/clients/?q=<texto>&is_active=true|false`
-- tatuadores: `GET /api/tattooers/?q=<texto>&is_active=true|false`
-- agendamentos:
-  - `GET /api/appointments/?q=<texto>&status=<status>`
-  - `GET /api/appointments/?tattooer=<id>&client=<id>`
-  - `GET /api/appointments/?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD`
-- ficha de saude: `GET /api/health-forms/?q=<texto>&client=<id>`
+- Papel **studio**: vê fichas apenas de clientes **já atendidos** no estúdio
+- Papel **tatuador**: vê fichas de clientes com sessão com ele no estúdio
+- Papel **client**: vê/edita a própria ficha
 
-Paginacao:
+### E-mails e tarefas agendadas 
 
-- todas as listagens retornam formato paginado DRF (`count`, `next`, `previous`, `results`)
-- tamanho padrao da pagina: `10`
+Configure SMTP no `.env` (ver `.env.example`).
 
-Permissoes por papel (RBAC inicial):
+**Opção A — agendador no processo Django (dev/servidor único):**
 
-- `studio`
-  - acesso completo a clientes, tatuadores, agendamentos e formularios de saude
-- `tattooer`
-  - pode listar/visualizar tatuadores e agendamentos; **clientes** e **fichas de saude** apenas dos clientes com sessao com o tatuador vinculado ao perfil
-  - pode atualizar **status** do agendamento diretamente; demais campos de agenda/conteudo via solicitacao de alteracao
-  - nao pode criar/excluir clientes e tatuadores
-- `client`
-  - pode listar/visualizar tatuadores, agendamentos e formularios de saude
-  - pode criar agendamentos e formularios de saude
-  - nao pode criar/editar/excluir clientes e tatuadores
+```env
+ENABLE_EMAIL_SCHEDULER=true
+SCHEDULER_INTERVAL_MINUTES=5
+```
 
-Transicoes de status permitidas:
+**Opção B — cron / Agendador de Tarefas (produção):**
 
-- `requested` -> `waiting_budget | confirmed | cancelled`
-- `waiting_budget` -> `confirmed | cancelled`
-- `confirmed` -> `in_progress | cancelled`
-- `in_progress` -> `done | cancelled`
-- `done` e `cancelled` nao permitem avancar para outros estados
+```powershell
+python manage.py run_scheduled_tasks
+```
 
-Para rotas autenticadas, envie o header:
+Esse comando executa lembretes (~30 min antes), purge de imagens de agendamento e purge de portfólio (7 dias após sessão concluída).
 
-`Authorization: Token <seu_token>`
+E-mails também são enviados em: criação/cancelamento/status de agendamento, solicitação de alteração, **aceite** e **recusa** de alteração.
+
+### Retenção de imagens 
+
+- `purge_expired_appointment_reference_images` — imagens do agendamento
+- `purge_expired_client_portfolio_images` — portfólio do cliente
+
+### Monitoramento 
+
+Respostas incluem o header `X-Response-Time-Ms` (tempo de processamento no servidor).
+
+### Permissões por papel
+
+- **studio**: CRUD completo no tenant; lista unificada de usuários; assinatura
+- **tattooer**: agenda e clientes do escopo de atendimento; alterações via change-request
+- **client**: agendar, portfólio e ficha próprios
+
+Header autenticado: `Authorization: Token <seu_token>`
 
 ## Estrutura
 
 | Pasta | Conteúdo |
 |--------|-----------|
-| `backend/` | Projeto Django (`config/`), app `studio` (API em `/api/…`) |
+| `backend/` | Django (`config/`), app `studio` |
 | `frontend/` | React 18 + Vite |
 | `requirements.txt` | Dependências Python |
 
-## Próximos passos (DVP)
+## Backend — revisão e boas práticas
 
-Autenticação (login, recuperação de senha), CRUD de clientes e tatuadores, agendamentos com validação de horário, formulário de saúde, upload de imagens (ex.: Cloudflare R2), notificações por e-mail.
+Ver **`backend/README.md`**: arquitetura, fluxo HTTP, multi-tenant, RBAC, agenda, assinatura e comandos agendados.
+
+### Orçamento (`waiting_budget`)
+
+- `GET/POST/PATCH /api/appointments/{id}/budget/` — envio de valor e notas (estúdio/tatuador)
+
+### Pagamento simulado (HU20)
+
+- `POST /api/studio/subscription/pay/` com `simulate_failure: true` registra falha e envia e-mail
+
+## SQLite de desenvolvimento (schema antigo)
+
+Se `migrate` falhar por `studio_studio` legado (`default_open_time`, etc.):
+
+```powershell
+cd backend
+python manage.py reconcile_legacy_database
+```
+
+## Pendências conhecidas (backend)
+
+- Pagamento real com gateway - simulação + e-mails já implementados
+- Cloudflare R2 — configurar `AWS_*` no `.env` (ver comentários em `config/settings.py`)

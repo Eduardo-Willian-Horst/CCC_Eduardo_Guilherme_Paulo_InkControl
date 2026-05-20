@@ -1,11 +1,17 @@
+"""
+Assinatura do tenant (HU16/HU20): status, pagamento simulado e cancelamento.
+
+O middleware subscription_gate bloqueia a API se paid_until expirou; estas rotas ficam liberadas.
+"""
+
 from django.conf import settings
 from django.utils import timezone
 from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from studio.features.notifications.email_service import send_plain_email
 from studio.features.studio_org.billing_repository import get_billing
+from studio.services.billing_notifications import notify_payment_attempt
 from studio.features.studio_org.billing_service import (
     extend_paid_period,
     mark_subscription_cancelled,
@@ -13,6 +19,7 @@ from studio.features.studio_org.billing_service import (
 )
 from studio.models import UserProfile
 from studio.permissions import get_user_role
+from studio.studio_scope import get_user_studio_id
 
 
 def _require_studio(request):
@@ -28,10 +35,12 @@ class StudioSubscriptionStatusView(APIView):
         deny = _require_studio(request)
         if deny:
             return deny
-        b = get_billing()
+        sid = get_user_studio_id(request.user)
+        b = get_billing(sid)
         now = timezone.now()
         return Response(
             {
+                "studio_id": sid,
                 "paid_until": b.paid_until,
                 "is_active": b.is_access_allowed(now),
                 "payment_cancelled_at": b.payment_cancelled_at,
@@ -51,19 +60,31 @@ class StudioSubscriptionPayView(APIView):
         deny = _require_studio(request)
         if deny:
             return deny
+        sid = get_user_studio_id(request.user)
         days = int(getattr(settings, "SUBSCRIPTION_BILLING_PERIOD_DAYS", 30))
         note = (request.data.get("note") or "Pagamento simulado (sem gateway)").strip()[:500]
-        extend_paid_period(days=days)
-        record_payment_attempt(True, note)
-        b = get_billing()
         recipients = [(request.user.email or "").strip()]
-        subject = "[InkControl] Pagamento da mensalidade"
-        body = (
-            f"Pagamento registrado com sucesso.\n"
-            f"Detalhe: {note}\n"
-            f"Acesso ate: {b.paid_until.isoformat()}\n"
+        simulate_fail = str(request.data.get("simulate_failure", "")).lower() in (
+            "1",
+            "true",
+            "yes",
         )
-        send_plain_email(subject, body, [e for e in recipients if e])
+        if simulate_fail:
+            record_payment_attempt(False, note or "Pagamento recusado (simulado).", studio_id=sid)
+            b = get_billing(sid)
+            notify_payment_attempt(b, ok=False, note=note, recipient_emails=recipients)
+            return Response(
+                {
+                    "detail": "Pagamento nao concluido.",
+                    "code": "payment_failed",
+                    "paid_until": b.paid_until,
+                },
+                status=status.HTTP_402_PAYMENT_REQUIRED,
+            )
+        extend_paid_period(days=days, studio_id=sid)
+        record_payment_attempt(True, note, studio_id=sid)
+        b = get_billing(sid)
+        notify_payment_attempt(b, ok=True, note=note, recipient_emails=recipients)
         return Response(
             {
                 "detail": "Mensalidade atualizada.",
@@ -79,18 +100,13 @@ class StudioSubscriptionCancelView(APIView):
         deny = _require_studio(request)
         if deny:
             return deny
-        mark_subscription_cancelled()
-        record_payment_attempt(True, "Cancelamento de renovacao automatica solicitado.")
-        b = get_billing()
+        sid = get_user_studio_id(request.user)
+        mark_subscription_cancelled(studio_id=sid)
+        cancel_note = "Cancelamento de renovacao automatica solicitado."
+        record_payment_attempt(True, cancel_note, studio_id=sid)
+        b = get_billing(sid)
         recipients = [(request.user.email or "").strip()]
-        send_plain_email(
-            "[InkControl] Mensalidade cancelada",
-            (
-                "A renovacao automatica foi cancelada. O acesso permanece ate "
-                f"{b.paid_until.isoformat()}.\n"
-            ),
-            [e for e in recipients if e],
-        )
+        notify_payment_attempt(b, ok=True, note=cancel_note, recipient_emails=recipients)
         return Response(
             {
                 "detail": "Renovacao cancelada; acesso ate o fim do periodo ja pago.",

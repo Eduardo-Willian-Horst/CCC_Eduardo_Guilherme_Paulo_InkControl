@@ -1,7 +1,14 @@
+"""CRUD de clientes do estudio (cadastro operacional, tenant via Client.studio)."""
+
 from django.db.models import Q
 from rest_framework import permissions, viewsets
 
-from studio.models import Appointment, Client, UserProfile
+from studio.models import Client, UserProfile
+from studio.studio_scope import (
+    client_has_blocking_appointments,
+    filter_clients_for_user,
+    get_user_studio_id,
+)
 from studio.permissions import RoleByActionPermission, get_user_role
 from studio.serializers import ClientSerializer
 
@@ -19,10 +26,13 @@ class ClientViewSet(viewsets.ModelViewSet):
         "destroy": {UserProfile.ROLE_STUDIO},
     }
 
+    def perform_create(self, serializer):
+        serializer.save(studio_id=get_user_studio_id(self.request.user))
+
     def perform_destroy(self, instance):
         from rest_framework.exceptions import ValidationError
 
-        if instance.appointments.exclude(status=Appointment.STATUS_CANCELLED).exists():
+        if client_has_blocking_appointments(instance):
             raise ValidationError(
                 "Nao e possivel excluir cliente com agendamentos que nao estejam cancelados."
             )
@@ -40,16 +50,7 @@ class ClientViewSet(viewsets.ModelViewSet):
         if is_active in {"true", "false"}:
             queryset = queryset.filter(is_active=(is_active == "true"))
 
-        if get_user_role(self.request.user) == UserProfile.ROLE_TATTOOER:
-            profile, _ = UserProfile.objects.select_related("tattooer").get_or_create(
-                user=self.request.user
-            )
-            if profile.tattooer_id:
-                queryset = queryset.filter(
-                    appointments__tattooer_id=profile.tattooer_id
-                ).distinct()
-            else:
-                queryset = queryset.none()
+        queryset = filter_clients_for_user(queryset, self.request.user)
         return queryset
 
 

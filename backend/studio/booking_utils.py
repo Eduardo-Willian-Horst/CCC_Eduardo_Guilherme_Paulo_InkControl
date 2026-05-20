@@ -1,3 +1,9 @@
+"""
+Utilitarios de agenda: expediente, sobreposicao de horarios, change-requests e notificacoes.
+
+user_appointment_scope_queryset() e o ponto unico de regra "quem ve quais agendamentos".
+"""
+
 from datetime import datetime, timedelta
 
 from django.conf import settings
@@ -10,9 +16,9 @@ from .models import (
     Appointment,
     AppointmentChangeRequest,
     InAppNotification,
-    StudioSettings,
     UserProfile,
 )
+from .studio_scope import ensure_profile_studio
 
 
 def studio_timezone():
@@ -20,10 +26,14 @@ def studio_timezone():
     return ZoneInfo(name)
 
 
-def validate_scheduled_within_studio_hours(scheduled_at):
+def validate_scheduled_within_studio_hours(scheduled_at, studio_id: int | None = None):
     if scheduled_at is None:
         return
-    st = StudioSettings.get_solo()
+    from studio.features.studio_org.org_services import get_settings_for_studio
+    from studio.studio_scope import default_studio
+
+    sid = studio_id or default_studio().pk
+    st = get_settings_for_studio(sid)
     tz = studio_timezone()
     if timezone.is_naive(scheduled_at):
         scheduled_at = timezone.make_aware(scheduled_at, tz)
@@ -53,23 +63,34 @@ def change_request_responder_user_ids(appointment: Appointment, requester: User)
     profile, _ = UserProfile.objects.select_related("tattooer").get_or_create(user=requester)
     role = profile.role
     ids = set()
+    studio_id = appointment.studio_id
     if role == UserProfile.ROLE_CLIENT:
-        ids.update(
-            User.objects.filter(profile__role=UserProfile.ROLE_STUDIO).values_list(
-                "id", flat=True
+        if studio_id:
+            ids.update(
+                User.objects.filter(
+                    profile__role=UserProfile.ROLE_STUDIO,
+                    profile__studio_id=studio_id,
+                ).values_list("id", flat=True)
             )
-        )
+        else:
+            ids.update(
+                User.objects.filter(profile__role=UserProfile.ROLE_STUDIO).values_list(
+                    "id", flat=True
+                )
+            )
         ids.update(
             User.objects.filter(profile__tattooer_id=appointment.tattooer_id).values_list(
                 "id", flat=True
             )
         )
     elif role == UserProfile.ROLE_TATTOOER:
-        ids.update(
-            User.objects.filter(profile__role=UserProfile.ROLE_STUDIO).values_list(
-                "id", flat=True
+        if studio_id:
+            ids.update(
+                User.objects.filter(
+                    profile__role=UserProfile.ROLE_STUDIO,
+                    profile__studio_id=studio_id,
+                ).values_list("id", flat=True)
             )
-        )
         em = (appointment.client.email or "").strip()
         if em:
             ids.update(User.objects.filter(email__iexact=em).values_list("id", flat=True))
@@ -130,7 +151,11 @@ def user_appointment_scope_queryset(user):
     if role == UserProfile.ROLE_TATTOOER:
         if not profile.tattooer_id:
             return Appointment.objects.none()
-        return qs.filter(tattooer_id=profile.tattooer_id)
+        studio_id = ensure_profile_studio(profile)
+        return qs.filter(tattooer_id=profile.tattooer_id, studio_id=studio_id)
+    if role == UserProfile.ROLE_STUDIO:
+        studio_id = ensure_profile_studio(profile)
+        return qs.filter(studio_id=studio_id)
     return qs
 
 
