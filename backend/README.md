@@ -130,7 +130,7 @@ Status com transicoes em `Appointment.ALLOWED_STATUS_TRANSITIONS`:
 
 - **Alteracao**: `appointment-change-requests` com accept/reject; notificacao + e-mail apos commit.
 
-- **HU06**: `health_snapshot` gravado no create; ficha viva so visivel com escopo em `studio_scope`.
+- `health_snapshot` gravado no create; ficha viva so visivel com escopo em `studio_scope`.
 
 
 
@@ -226,7 +226,7 @@ studio/
 
 
 
-Inclui `tests_ops.py`: gate 402, purge, pagamento, orcamento, notificacoes, upload de imagem e RNF01.
+Inclui `tests_ops.py`: gate 402, purge, pagamento, orcamento, notificacoes, upload de imagem.
 
 
 
