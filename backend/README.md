@@ -24,7 +24,7 @@ Cliente HTTP
 
   -> ResponseTimeMiddleware (header X-Response-Time-Ms)
 
-  -> DRF: InactivityTokenAuthentication (RNF05)
+  -> DRF: InactivityTokenAuthentication
 
   -> ViewSet / APIView em studio/features/*/controller.py
 
