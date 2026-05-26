@@ -6,7 +6,7 @@ logger = logging.getLogger(__name__)
 
 
 class StudioConfig(AppConfig):
-    """App principal; inicia APScheduler se ENABLE_EMAIL_SCHEDULER=true."""
+    """App principal; inicia o scheduler interno junto do runserver."""
     default_auto_field = "django.db.models.BigAutoField"
     name = "studio"
 
@@ -18,6 +18,5 @@ class StudioConfig(AppConfig):
             start_scheduler()
         except Exception:
             logger.exception(
-                "Falha ao iniciar APScheduler (ENABLE_EMAIL_SCHEDULER); "
-                "use cron com run_scheduled_tasks em producao."
+                "Falha ao iniciar scheduler interno do InkControl."
             )

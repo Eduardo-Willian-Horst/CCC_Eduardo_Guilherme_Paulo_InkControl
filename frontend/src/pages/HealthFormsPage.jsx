@@ -113,7 +113,10 @@ export function HealthFormsPage() {
             >
               {data.results.map((f) => (
                 <tr key={f.id}>
-                  <td>#{f.client}</td>
+                  <td>
+                    <div>{f.client_name || 'Cliente'}</div>
+                    {f.client_email ? <div className="ic-muted">{f.client_email}</div> : null}
+                  </td>
                   <td className="ic-muted">
                     {(f.allergies || '').slice(0, 80)}
                     {(f.allergies || '').length > 80 ? '…' : ''}

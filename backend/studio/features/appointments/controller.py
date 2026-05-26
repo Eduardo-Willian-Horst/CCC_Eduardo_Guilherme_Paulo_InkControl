@@ -32,21 +32,33 @@ from studio.serializers import (
     AppointmentReadSerializer,
     AppointmentSerializer,
 )
-from studio.services.appointment_service import service_error_to_drf
-from studio.services.budget_service import submit_or_update_budget
+from studio.services.appointment_service import ensure_client_has_health_form, service_error_to_drf
+from studio.services.budget_service import (
+    accept_budget as accept_appointment_budget,
+    reject_budget as reject_appointment_budget,
+    submit_or_update_budget,
+)
 from studio.services.exceptions import ServiceValidationError
 
 from studio.features.auth.utils import get_or_create_client_for_app_user
 from studio.features.notifications.appointment_mail_events import (
+    notify_appointment_budget_sent,
     notify_appointment_cancelled,
     notify_appointment_created,
+    notify_appointment_status_change,
+    notify_appointment_updated,
     notify_change_request_accepted,
     notify_change_request_rejected,
 )
 
 
 class AppointmentViewSet(viewsets.ModelViewSet):
-    queryset = Appointment.objects.select_related("client", "tattooer", "client__health_form")
+    queryset = Appointment.objects.select_related(
+        "client",
+        "tattooer",
+        "client__health_form",
+        "source_consultation",
+    )
     serializer_class = AppointmentSerializer
     permission_classes = [permissions.IsAuthenticated, RoleByActionPermission]
     role_permissions = {
@@ -77,7 +89,12 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             UserProfile.ROLE_TATTOOER,
             UserProfile.ROLE_CLIENT,
         },
+        "confirm": {UserProfile.ROLE_STUDIO, UserProfile.ROLE_TATTOOER},
+        "start": {UserProfile.ROLE_STUDIO, UserProfile.ROLE_TATTOOER},
+        "complete": {UserProfile.ROLE_STUDIO, UserProfile.ROLE_TATTOOER},
         "budget": {UserProfile.ROLE_STUDIO, UserProfile.ROLE_TATTOOER},
+        "accept_budget": {UserProfile.ROLE_CLIENT},
+        "reject_budget": {UserProfile.ROLE_CLIENT},
     }
 
     def get_serializer_class(self):
@@ -93,18 +110,44 @@ class AppointmentViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         if get_user_role(self.request.user) == UserProfile.ROLE_CLIENT:
-            client = get_or_create_client_for_app_user(self.request.user)
+            tattooer = serializer.validated_data.get("tattooer")
+            target_studio_id = tattooer.studio_id if tattooer else None
+            client = get_or_create_client_for_app_user(
+                self.request.user,
+                studio_id=target_studio_id,
+            )
+            try:
+                ensure_client_has_health_form(client)
+            except ServiceValidationError as exc:
+                raise service_error_to_drf(exc) from exc
             instance = serializer.save(client=client)
         else:
             instance = serializer.save()
-        notify_appointment_created(instance)
+        notify_appointment_created(instance, actor=self.request.user)
 
     def perform_update(self, serializer):
+        fields_to_notify = {
+            "client",
+            "tattooer",
+            "scheduled_at",
+            "description",
+            "appointment_kind",
+            "duration_minutes",
+            "reference_image",
+        }
+        tracked_fields = fields_to_notify.intersection(serializer.validated_data.keys())
+        old_values = {field: getattr(serializer.instance, field) for field in tracked_fields}
         if get_user_role(self.request.user) == UserProfile.ROLE_CLIENT:
             client = get_or_create_client_for_app_user(self.request.user)
-            serializer.save(client=client)
+            appointment = serializer.save(client=client)
         else:
-            serializer.save()
+            appointment = serializer.save()
+        changed = any(
+            old_values[field] != getattr(appointment, field)
+            for field in tracked_fields
+        )
+        if changed:
+            notify_appointment_updated(appointment, actor=self.request.user)
 
     @action(detail=True, methods=["post"], url_path="cancel")
     def cancel(self, request, pk=None):
@@ -116,9 +159,52 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             )
         appointment.status = Appointment.STATUS_CANCELLED
         appointment.save(update_fields=["status", "updated_at"])
-        notify_appointment_cancelled(appointment)
+        notify_appointment_cancelled(appointment, actor=request.user)
         serializer = AppointmentReadSerializer(appointment, context={"request": request})
         return Response(serializer.data)
+
+    def _transition_status(self, request, appointment, next_status):
+        if appointment.status == next_status:
+            return Response(
+                {"detail": "Esta acao ja foi aplicada a este agendamento."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not Appointment.can_transition(appointment.status, next_status):
+            return Response(
+                {"detail": "Nao e possivel executar esta acao neste agendamento."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if appointment.appointment_kind == Appointment.KIND_SERVICE and next_status == Appointment.STATUS_CONFIRMED:
+            return Response(
+                {
+                    "detail": (
+                        "Envie o orcamento da sessao. Ela sera confirmada quando "
+                        "o cliente aceitar."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        old_status = appointment.status
+        appointment.status = next_status
+        appointment.save(update_fields=["status", "updated_at"])
+        notify_appointment_status_change(appointment, old_status, actor=request.user)
+        serializer = AppointmentReadSerializer(appointment, context={"request": request})
+        return Response(serializer.data)
+
+    @action(detail=True, methods=["post"], url_path="confirm")
+    def confirm(self, request, pk=None):
+        appointment = self.get_object()
+        return self._transition_status(request, appointment, Appointment.STATUS_CONFIRMED)
+
+    @action(detail=True, methods=["post"], url_path="start")
+    def start(self, request, pk=None):
+        appointment = self.get_object()
+        return self._transition_status(request, appointment, Appointment.STATUS_IN_PROGRESS)
+
+    @action(detail=True, methods=["post"], url_path="complete")
+    def complete(self, request, pk=None):
+        appointment = self.get_object()
+        return self._transition_status(request, appointment, Appointment.STATUS_DONE)
 
     @action(detail=True, methods=["get", "post", "patch"], url_path="budget")
     def budget(self, request, pk=None):
@@ -136,6 +222,8 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             )
         ser = AppointmentBudgetSerializer(data=request.data, partial=request.method == "PATCH")
         ser.is_valid(raise_exception=True)
+        old_budget_sent_at = appointment.budget_sent_at
+        old_status = appointment.status
         try:
             appointment = submit_or_update_budget(
                 appointment,
@@ -146,13 +234,43 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             )
         except ServiceValidationError as exc:
             raise service_error_to_drf(exc)
+        if old_status != appointment.status:
+            notify_appointment_status_change(appointment, old_status, actor=request.user)
+        elif old_budget_sent_at != appointment.budget_sent_at:
+            notify_appointment_budget_sent(appointment, actor=request.user)
+        out = AppointmentReadSerializer(appointment, context={"request": request})
+        return Response(out.data)
+
+    @action(detail=True, methods=["post"], url_path="budget/accept")
+    def accept_budget(self, request, pk=None):
+        appointment = self.get_object()
+        old_status = appointment.status
+        try:
+            appointment = accept_appointment_budget(appointment, request.user)
+        except ServiceValidationError as exc:
+            raise service_error_to_drf(exc)
+        if old_status != appointment.status:
+            notify_appointment_status_change(appointment, old_status, actor=request.user)
+        out = AppointmentReadSerializer(appointment, context={"request": request})
+        return Response(out.data)
+
+    @action(detail=True, methods=["post"], url_path="budget/reject")
+    def reject_budget(self, request, pk=None):
+        appointment = self.get_object()
+        old_status = appointment.status
+        try:
+            appointment = reject_appointment_budget(appointment, request.user)
+        except ServiceValidationError as exc:
+            raise service_error_to_drf(exc)
+        if old_status != appointment.status:
+            notify_appointment_status_change(appointment, old_status, actor=request.user)
         out = AppointmentReadSerializer(appointment, context={"request": request})
         return Response(out.data)
 
     def get_queryset(self):
         # Base: regra central de visibilidade (studio / tatuador / cliente).
         queryset = user_appointment_scope_queryset(self.request.user).select_related(
-            "client", "tattooer", "client__health_form"
+            "client", "tattooer", "client__health_form", "source_consultation"
         )
         q = self.request.query_params.get("q")
         status_filter = self.request.query_params.get("status")
@@ -295,10 +413,10 @@ class AppointmentChangeRequestViewSet(viewsets.ModelViewSet):
             AppointmentChangeRequest.objects.filter(
                 appointment_id=appt_id, status=AppointmentChangeRequest.STATUS_PENDING
             ).exclude(pk=cr.pk).update(status=AppointmentChangeRequest.STATUS_REJECTED)
-        appt = Appointment.objects.select_related("client", "tattooer", "client__health_form").get(
-            pk=appt_id
-        )
-        notify_change_request_accepted(appt)
+        appt = Appointment.objects.select_related(
+            "client", "tattooer", "client__health_form", "source_consultation"
+        ).get(pk=appt_id)
+        notify_change_request_accepted(appt, actor=request.user)
         out = AppointmentReadSerializer(appt, context={"request": request})
         return Response({"appointment": out.data, "change_request": {"id": cr.id, "status": cr.status}})
 
@@ -313,7 +431,7 @@ class AppointmentChangeRequestViewSet(viewsets.ModelViewSet):
         cr.status = AppointmentChangeRequest.STATUS_REJECTED
         cr.save(update_fields=["status", "updated_at"])
         appt = cr.appointment
-        notify_change_request_rejected(appt)
+        notify_change_request_rejected(appt, actor=request.user)
         return Response(
             AppointmentChangeRequestSerializer(cr, context={"request": request}).data
         )

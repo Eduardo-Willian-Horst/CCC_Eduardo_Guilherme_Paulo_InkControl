@@ -9,6 +9,7 @@ import {
 } from '../lib/constants'
 import {
   addDaysToISODate,
+  formatBudgetAmount,
   formatDateTime,
   formatTimeShort,
   todayISODateLocal,
@@ -50,6 +51,10 @@ function tattooerProfileId(row) {
 
 function canCancelRow(row) {
   return row.status !== 'done' && row.status !== 'cancelled'
+}
+
+function hasPendingBudget(row) {
+  return row.status === 'waiting_budget' && row.budget_amount != null
 }
 
 function studioTimeToMinutes(value) {
@@ -344,10 +349,10 @@ export function AppointmentsPage() {
           <h1 className="ic-page__title">{isClient ? 'Meus agendamentos' : 'Agendamentos'}</h1>
           <p className="ic-page__lede">
             {isClient
-              ? 'Acompanhe o status das suas sessões. Para marcar outro horário, escolha um profissional na vitrine.'
+              ? 'Acompanhe avaliações e sessões. A sessão só pode ser solicitada depois de uma avaliação aprovada.'
               : isStudio && useAgendaView
                 ? 'Vista do dia alinhada ao expediente do estúdio. Use os filtros abaixo e “Aplicar” para refinar.'
-                : 'Fila de atendimento com estados e bloqueio de conflito de horário por tatuador.'}
+                : 'Fila de avaliações e sessões com estados e bloqueio de conflito de horário por tatuador.'}
           </p>
         </div>
       </div>
@@ -545,17 +550,33 @@ export function AppointmentsPage() {
                     {a.appointment_kind === 'consultation' ? (
                       <Badge variant="outline">{APPOINTMENT_KIND_LABELS.consultation}</Badge>
                     ) : (
-                      <span className="ic-muted">{APPOINTMENT_KIND_LABELS.service}</span>
+                      <>
+                        <span className="ic-muted">{APPOINTMENT_KIND_LABELS.service}</span>
+                        {a.source_consultation_summary ? (
+                          <div className="ic-muted">Após avaliação</div>
+                        ) : null}
+                      </>
                     )}
                   </td>
                   <td>
                     <Badge variant="outline">
                       {APPOINTMENT_STATUS_LABELS[a.status] ?? a.status}
                     </Badge>
+                    {isClient && hasPendingBudget(a) ? (
+                      <div className="ic-muted">
+                        Orçamento recebido: {formatBudgetAmount(a.budget_amount)}
+                      </div>
+                    ) : null}
                   </td>
                   <td>
                     <div className="ic-row-actions">
-                      <Link to={`/agendamentos/${a.id}/editar`}>Detalhes</Link>
+                      {isClient && hasPendingBudget(a) ? (
+                        <Link to={`/agendamentos/${a.id}/editar`}>
+                          Ver e responder orçamento
+                        </Link>
+                      ) : (
+                        <Link to={`/agendamentos/${a.id}/editar`}>Detalhes</Link>
+                      )}
                       {canCancelRow(a) ? (
                         <Button
                           type="button"

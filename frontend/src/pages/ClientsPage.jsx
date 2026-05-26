@@ -137,11 +137,13 @@ export function ClientsPage() {
                   </td>
                   <td className="ic-muted">{formatDateTime(c.updated_at)}</td>
                   <td>
-                    {canWrite ? (
-                      <Link to={`/clientes/${c.id}/editar`}>Editar</Link>
-                    ) : (
-                      <span className="ic-muted">Somente leitura</span>
-                    )}
+                    <div className="ic-row-actions">
+                      {canWrite ? (
+                        <Link to={`/clientes/${c.id}/editar`}>Editar</Link>
+                      ) : (
+                        <span className="ic-muted">Somente leitura</span>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}

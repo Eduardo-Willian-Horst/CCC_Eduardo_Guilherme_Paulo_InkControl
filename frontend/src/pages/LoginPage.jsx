@@ -88,6 +88,9 @@ export function LoginPage() {
                 </Button>
               </div>
             </form>
+            <p className="ic-auth__footer">
+              <Link to="/recuperar-senha">Esqueci minha senha</Link>
+            </p>
           </CardBody>
         </Card>
         <p className="ic-auth__footer">

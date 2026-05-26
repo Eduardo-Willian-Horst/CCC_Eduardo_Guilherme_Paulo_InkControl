@@ -11,11 +11,13 @@ function navLabel(item, role) {
 
 const NAV = [
   { to: '/tatuadores', label: 'Profissionais', roles: null, clientLabel: 'Profissionais' },
+  { to: '/pedidos', label: 'Pedidos', roles: [ROLES.studio] },
   { to: '/agendamentos', label: 'Agendamentos', roles: null, clientLabel: 'Meus agendamentos' },
   { to: '/notificacoes', label: 'Notificações', roles: null, clientLabel: 'Notificações' },
   { to: '/fichas-saude', label: 'Fichas de saúde', roles: null, clientLabel: 'Minha saúde' },
   { to: '/clientes', label: 'Clientes', roles: [ROLES.studio, ROLES.tattooer] },
   { to: '/estudio/horario', label: 'Horário do estúdio', roles: [ROLES.studio] },
+  { to: '/estudio/assinatura', label: 'Assinatura', roles: [ROLES.studio] },
 ]
 
 export function AppShell() {

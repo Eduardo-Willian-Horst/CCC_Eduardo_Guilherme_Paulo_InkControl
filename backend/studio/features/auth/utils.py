@@ -7,16 +7,21 @@ from studio.models import Client, InAppNotification, Tattooer, UserProfile
 from studio.studio_scope import default_studio, get_user_studio_id
 
 
-def get_or_create_client_for_app_user(user):
+def get_or_create_client_for_app_user(user, studio_id=None):
     email = (user.email or "").strip().lower()
     if not email:
         return None
     found = Client.objects.filter(email__iexact=email).first()
     if found:
+        if studio_id and found.studio_id != studio_id:
+            found.studio_id = studio_id
+            found.save(update_fields=["studio"])
         return found
     name = (user.first_name or "").strip() or email.split("@")[0]
     try:
-        studio_id = get_user_studio_id(user) if user.is_authenticated else default_studio().pk
+        studio_id = studio_id or (
+            get_user_studio_id(user) if user.is_authenticated else default_studio().pk
+        )
         return Client.objects.create(
             name=name[:120],
             email=email,

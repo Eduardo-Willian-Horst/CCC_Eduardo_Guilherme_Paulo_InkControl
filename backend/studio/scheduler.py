@@ -1,4 +1,7 @@
-"""Agendador em processo (APScheduler) quando ENABLE_EMAIL_SCHEDULER=true."""
+"""Agendador em processo para tarefas recorrentes durante o runserver."""
+
+import os
+import sys
 
 _scheduler = None
 
@@ -11,6 +14,11 @@ def start_scheduler():
 
     if not getattr(settings, "ENABLE_EMAIL_SCHEDULER", False):
         return
+    if "runserver" not in sys.argv:
+        return
+    if getattr(settings, "DEBUG", False) and os.environ.get("RUN_MAIN") != "true":
+        if "--noreload" not in sys.argv:
+            return
     from apscheduler.schedulers.background import BackgroundScheduler
     from django.core.management import call_command
 

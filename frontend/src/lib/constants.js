@@ -31,7 +31,7 @@ export const APPOINTMENT_KIND_LABELS = {
 
 export const APPOINTMENT_STATUS_LABELS = {
   requested: 'Solicitado',
-  waiting_budget: 'Aguardando orçamento',
+  waiting_budget: 'Orçamento enviado',
   confirmed: 'Sessão confirmada',
   in_progress: 'Em andamento',
   done: 'Concluído',

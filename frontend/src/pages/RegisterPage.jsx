@@ -11,10 +11,11 @@ import { Spinner } from '../components/ui/Spinner'
 import './auth.css'
 
 export function RegisterPage() {
-  const { register, user, loading } = useAuth()
+  const { register, registerStudio, user, loading } = useAuth()
   const navigate = useNavigate()
 
   const [name, setName] = useState('')
+  const [studioName, setStudioName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [role, setRole] = useState(ROLES.client)
@@ -40,12 +41,21 @@ export function RegisterPage() {
     setError('')
     setSubmitting(true)
     try {
-      await register({
-        name: name.trim(),
-        email: email.trim(),
-        password,
-        role,
-      })
+      if (role === ROLES.studio) {
+        await registerStudio({
+          studio_name: studioName.trim(),
+          admin_name: name.trim(),
+          admin_email: email.trim(),
+          password,
+        })
+      } else {
+        await register({
+          name: name.trim(),
+          email: email.trim(),
+          password,
+          role: ROLES.client,
+        })
+      }
       navigate('/tatuadores', { replace: true })
     } catch (err) {
       setError(err.message || 'Não foi possível cadastrar.')
@@ -61,7 +71,7 @@ export function RegisterPage() {
           <CardHeader>
             <h1 className="ic-auth__title">Criar conta</h1>
             <p className="ic-auth__lede">
-              Papéis conforme RBAC do back-end (estúdio, tatuador, cliente)
+              Cadastre-se como cliente para agendar ou como estúdio para administrar a agenda.
             </p>
           </CardHeader>
           <CardBody>
@@ -71,7 +81,30 @@ export function RegisterPage() {
                   <Alert variant="error">{error}</Alert>
                 </div>
               ) : null}
-              <Field label="Nome completo" id="reg-name">
+              <Field label="Tipo de cadastro" id="reg-role">
+                <Select
+                  id="reg-role"
+                  value={role}
+                  onChange={(e) => setRole(e.target.value)}
+                >
+                  <option value={ROLES.client}>{ROLE_LABELS.client}</option>
+                  <option value={ROLES.studio}>{ROLE_LABELS.studio}</option>
+                </Select>
+              </Field>
+              {role === ROLES.studio ? (
+                <Field label="Nome do estúdio" id="reg-studio-name">
+                  <Input
+                    id="reg-studio-name"
+                    required
+                    value={studioName}
+                    onChange={(e) => setStudioName(e.target.value)}
+                  />
+                </Field>
+              ) : null}
+              <Field
+                label={role === ROLES.studio ? 'Nome do administrador' : 'Nome completo'}
+                id="reg-name"
+              >
                 <Input
                   id="reg-name"
                   autoComplete="name"
@@ -101,20 +134,13 @@ export function RegisterPage() {
                   onChange={(e) => setPassword(e.target.value)}
                 />
               </Field>
-              <Field label="Papel no sistema" id="reg-role">
-                <Select
-                  id="reg-role"
-                  value={role}
-                  onChange={(e) => setRole(e.target.value)}
-                >
-                  <option value={ROLES.client}>{ROLE_LABELS.client}</option>
-                  <option value={ROLES.tattooer}>{ROLE_LABELS.tattooer}</option>
-                  <option value={ROLES.studio}>{ROLE_LABELS.studio}</option>
-                </Select>
-              </Field>
               <div className="ic-auth__stack">
                 <Button type="submit" variant="primary" disabled={submitting}>
-                  {submitting ? 'Criando…' : 'Cadastrar'}
+                  {submitting
+                    ? 'Criando…'
+                    : role === ROLES.studio
+                      ? 'Cadastrar estúdio'
+                      : 'Cadastrar cliente'}
                 </Button>
               </div>
             </form>

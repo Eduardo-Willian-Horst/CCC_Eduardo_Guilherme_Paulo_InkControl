@@ -4,10 +4,7 @@ from django.utils.dateparse import parse_datetime
 
 from studio.booking_utils import user_appointment_scope_queryset
 from studio.models import Appointment, Tattooer
-from studio.services.appointment_service import (
-    validate_consultation_offered,
-    validate_schedule_and_conflict,
-)
+from studio.services.appointment_service import validate_schedule_and_conflict
 from studio.services.exceptions import ServiceValidationError
 
 CHANGE_REQUEST_ALLOWED_KEYS = frozenset(
@@ -67,16 +64,6 @@ def validate_change_request_write(attrs, context) -> dict:
             Appointment.KIND_CONSULTATION,
         ):
             raise ServiceValidationError({"proposed_changes": "Modalidade invalida."})
-        sid = appointment.studio_id or (
-            appointment.tattooer.studio_id if appointment.tattooer_id else None
-        )
-        if sid:
-            try:
-                validate_consultation_offered(sid, changes["appointment_kind"])
-            except ServiceValidationError as exc:
-                detail = exc.detail.get("appointment_kind", exc.detail)
-                raise ServiceValidationError({"proposed_changes": detail}) from exc
-
     if "duration_minutes" in changes:
         try:
             dm = int(changes["duration_minutes"])

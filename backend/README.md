@@ -2,7 +2,7 @@
 
 
 
-API REST para gestao de estudio de tatuagem: multi-tenant, agenda, saude (LGPD), assinatura e e-mails transacionais.
+API REST para gestao de estudio de tatuagem: multi-tenant, agenda, saude (LGPD), assinatura, notificacoes in-app e e-mails transacionais.
 
 
 
@@ -54,7 +54,7 @@ Cliente HTTP
 
 | **Escopo tenant** | `studio_scope.py` | Quem ve quais clientes, fichas, estudio |
 
-| **Agenda** | `booking_utils.py` | Expediente, sobreposicao, change-requests, notificacoes in-app |
+| **Agenda** | `booking_utils.py` e `services/appointment_service.py` | Expediente, sobreposicao, avaliacao previa, change-requests e escopo de agenda |
 
 | **Dominio** | `models.py` | Entidades e maquina de status de `Appointment` |
 
@@ -74,7 +74,7 @@ Cliente HTTP
 
 - Registro de **novo** estudio: `POST /api/studios/register/` (cria Studio + Settings + Billing + admin).
 
-- Registro de cliente/tatuador: `POST /api/auth/register/` (vincula ao estudio padrao ou existente).
+- Registro publico de cliente: `POST /api/auth/register/` (vincula ao estudio padrao ou existente).
 
 - Filtros centralizados em `studio_scope.py` e `user_appointment_scope_queryset()` em `booking_utils.py`.
 
@@ -94,11 +94,11 @@ Cada ViewSet define `role_permissions = { "list": {ROLE_STUDIO, ...}, ... }`.
 
 |-------|------------|
 
-| `studio` | Admin do tenant: CRUD, assinatura, usuarios do sistema |
+| `studio` | Admin do tenant: CRUD operacional e assinatura |
 
 | `tattooer` | Agenda e clientes do seu escopo; change-requests |
 
-| `client` | Agendar, portfólio e ficha proprios |
+| `client` | Solicitar avaliação/sessão e manter a própria ficha de saúde |
 
 
 
@@ -112,9 +112,19 @@ Status com transicoes em `Appointment.ALLOWED_STATUS_TRANSITIONS`:
 
 `requested` -> `waiting_budget` -> `confirmed` -> `in_progress` -> `done` (ou `cancelled` em varios pontos).
 
+- **Avaliacao primeiro**: cliente solicita `consultation`; so depois de uma avaliacao `confirmed` ou `done` pode solicitar `service` com o mesmo profissional.
+
+- **Imagem de referencia**: `reference_image` pode ser enviada na solicitacao do agendamento via multipart.
+
+- **Status sem edicao manual**: mudancas usam acoes dedicadas (`confirm`, `start`, `complete`, `cancel`, `budget/accept`, `budget/reject`).
+
+- **Pedidos do cliente**: estudio nao altera diretamente uma solicitacao pendente; usa acoes do fluxo ou `appointment-change-requests`.
+
 
 
 - **Orcamento**: `POST/PATCH /api/appointments/{id}/budget/` (`budget_service`).
+
+- **Resposta do cliente ao orcamento**: `POST .../budget/accept/` confirma a sessao; `POST .../budget/reject/` cancela a solicitacao.
 
 - **Cancelar**: `POST .../cancel/` (nao usa DELETE).
 
@@ -144,13 +154,19 @@ Status com transicoes em `Appointment.ALLOWED_STATUS_TRANSITIONS`:
 
 |-----------|-------------|
 
-| `ENABLE_EMAIL_SCHEDULER=true` | APScheduler no processo Django (`scheduler.py` -> `run_scheduled_tasks`) |
+| `manage.py runserver` | Sobe a API e o scheduler interno no mesmo processo Django |
 
-| Cron / Agendador Windows | `python manage.py run_scheduled_tasks` em producao |
+| `ENABLE_EMAIL_SCHEDULER=false` | Desliga o scheduler interno quando precisar rodar sem tarefas recorrentes |
 
 
 
-Comandos: lembretes 30 min antes, purge de imagens de agendamento e portfólio.
+Com `runserver`, o scheduler interno executa lembretes 30 min antes e purge de imagens de referência do agendamento. O comando `run_scheduled_tasks` continua existindo apenas para manutenção manual.
+
+
+### Notificacoes
+
+
+`InAppNotification` guarda avisos por usuario autenticado. Eventos de agendamento notificam os participantes do outro lado: criacao, edicao permitida, cancelamento, mudanca de status, envio de orcamento, aceite/recusa de orcamento e aceite/recusa de contraproposta.
 
 
 
@@ -204,13 +220,13 @@ studio/
 
 ```powershell
 
-python manage.py test studio
+..\.venv\Scripts\python.exe manage.py test studio
 
 ```
 
 
 
-Inclui `tests_ops.py`: gate 402, purge, pagamento, orcamento, RNF01.
+Inclui `tests_ops.py`: gate 402, purge, pagamento, orcamento, notificacoes, upload de imagem e RNF01.
 
 
 
@@ -220,7 +236,7 @@ Inclui `tests_ops.py`: gate 402, purge, pagamento, orcamento, RNF01.
 
 ```powershell
 
-python manage.py reconcile_legacy_database
+..\.venv\Scripts\python.exe manage.py reconcile_legacy_database
 
 ```
 
@@ -236,7 +252,6 @@ Converte `studio_studio` antigo e aplica migracoes 0008–0010.
 
 - Gateway de pagamento real (substituir simulacao em `subscription_controller`).
 
-- Front-end (fora deste repositorio backend).
 
 
 

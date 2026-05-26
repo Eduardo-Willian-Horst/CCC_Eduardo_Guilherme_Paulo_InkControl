@@ -33,7 +33,6 @@ from studio.features.studio_org.subscription_controller import (
 )
 from studio.features.tattooers.controller import TattooerViewSet
 from studio.features.users.controller import AccountUserViewSet, SystemUserListView
-from studio.features.portfolio.controller import ClientPortfolioImageViewSet
 
 # --- ViewSets (CRUD paginado) ---
 router = DefaultRouter()
@@ -47,7 +46,6 @@ router.register(
 )
 router.register("notifications", InAppNotificationViewSet, basename="notification")
 router.register("health-forms", ClientHealthFormViewSet, basename="health-form")
-router.register("portfolio-images", ClientPortfolioImageViewSet, basename="portfolio-image")
 router.register("accounts", AccountUserViewSet, basename="account")
 router.register("studios", StudioViewSet, basename="studio")
 

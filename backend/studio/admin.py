@@ -7,7 +7,6 @@ from .models import (
     AppointmentChangeRequest,
     Client,
     ClientHealthForm,
-    ClientPortfolioImage,
     InAppNotification,
     Studio,
     StudioBilling,
@@ -27,5 +26,4 @@ admin.site.register(StudioSettings)
 admin.site.register(StudioBilling)
 admin.site.register(AppointmentChangeRequest)
 admin.site.register(InAppNotification)
-admin.site.register(ClientPortfolioImage)
 admin.site.register(TokenActivity)

@@ -18,7 +18,7 @@ def get_settings_for_studio(studio_id: int) -> StudioSettings:
         defaults={
             "opens_at": time(9, 0),
             "closes_at": time(18, 0),
-            "offers_consultation": False,
+            "offers_consultation": True,
         },
     )
     return obj

@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { apiFetch } from '../api/client'
 import { ROLES } from '../lib/constants'
+import { fetchAllPaginated } from '../lib/fetchAllPaginated'
 import { tattooerPortraitSrc } from '../lib/tattooerPortrait'
 import { Alert } from '../components/ui/Alert'
 import { Button } from '../components/ui/Button'
@@ -17,6 +18,7 @@ export function TattooerProfilePage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [t, setT] = useState(null)
+  const [hasValidConsultation, setHasValidConsultation] = useState(false)
 
   const canBook = user?.role === ROLES.client || user?.role === ROLES.studio
   const isStudio = user?.role === ROLES.studio
@@ -28,7 +30,18 @@ export function TattooerProfilePage() {
       setError('')
       try {
         const row = await apiFetch(`/api/tattooers/${id}/`)
-        if (!cancelled) setT(row)
+        if (cancelled) return
+        setT(row)
+        if (user?.role === ROLES.client) {
+          const consultations = await fetchAllPaginated(
+            `/api/appointments/?tattooer=${row.id}&appointment_kind=consultation`,
+          )
+          if (!cancelled) {
+            setHasValidConsultation(
+              consultations.some((a) => a.status === 'confirmed' || a.status === 'done'),
+            )
+          }
+        }
       } catch (e) {
         if (!cancelled) setError(e.message ?? String(e))
       } finally {
@@ -39,7 +52,7 @@ export function TattooerProfilePage() {
     return () => {
       cancelled = true
     }
-  }, [id])
+  }, [id, user?.role])
 
   if (loading) {
     return (
@@ -99,13 +112,20 @@ export function TattooerProfilePage() {
             Contato: <strong>{t.contact}</strong>
           </p>
           <p style={{ fontSize: 'var(--ds-text-md)', lineHeight: 'var(--ds-line-relaxed)' }}>
-            Escolha abaixo para solicitar um horário com este profissional. O estúdio confirma datas e
-            valores conforme a conversa com você.
+            {user?.role === ROLES.client
+              ? hasValidConsultation
+                ? 'Você já tem uma avaliação aprovada com este profissional. Agora pode solicitar uma sessão, que ainda precisa ser confirmada.'
+                : 'Primeiro solicite uma avaliação. O profissional consulta sua ficha de saúde antes de liberar uma sessão.'
+              : 'Escolha abaixo para solicitar um horário com este profissional. O estúdio confirma datas e valores conforme a conversa com você.'}
           </p>
           <div className="ic-profile-actions">
             {canBook && t.is_active ? (
               <Button type="button" onClick={() => navigate(`/tatuadores/${t.id}/agendar`)}>
-                Agendar com {t.name.split(' ')[0] || t.name}
+                {user?.role === ROLES.client && hasValidConsultation
+                  ? 'Solicitar sessão'
+                  : user?.role === ROLES.client
+                    ? 'Solicitar avaliação'
+                    : `Agendar com ${t.name.split(' ')[0] || t.name}`}
               </Button>
             ) : null}
             <Button type="button" variant="ghost" onClick={() => navigate('/tatuadores')}>

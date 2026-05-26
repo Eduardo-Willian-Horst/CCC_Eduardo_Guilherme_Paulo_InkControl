@@ -21,6 +21,8 @@ export function ClientFormPage() {
   const [phone, setPhone] = useState('')
   const [email, setEmail] = useState('')
   const [isActive, setIsActive] = useState('true')
+  const [originalIsActive, setOriginalIsActive] = useState('true')
+  const [removing, setRemoving] = useState(false)
 
   useEffect(() => {
     if (isNew) return
@@ -35,6 +37,7 @@ export function ClientFormPage() {
         setPhone(c.phone ?? '')
         setEmail(c.email ?? '')
         setIsActive(c.is_active ? 'true' : 'false')
+        setOriginalIsActive(c.is_active ? 'true' : 'false')
       } catch (e) {
         if (!cancelled) setError(e.message ?? String(e))
       } finally {
@@ -57,6 +60,12 @@ export function ClientFormPage() {
       email: email.trim(),
       is_active: isActive === 'true',
     }
+    if (!isNew && originalIsActive === 'true' && isActive === 'false') {
+      if (!window.confirm('Inativar este cliente?')) {
+        setSaving(false)
+        return
+      }
+    }
     try {
       if (isNew) {
         await apiFetch('/api/clients/', { method: 'POST', body: JSON.stringify(body) })
@@ -68,6 +77,21 @@ export function ClientFormPage() {
       setError(err.message ?? String(err))
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function handleDelete() {
+    if (isNew) return
+    if (!window.confirm('Excluir este cliente?')) return
+    setRemoving(true)
+    setError('')
+    try {
+      await apiFetch(`/api/clients/${id}/`, { method: 'DELETE' })
+      navigate('/clientes')
+    } catch (err) {
+      setError(err.message ?? String(err))
+    } finally {
+      setRemoving(false)
     }
   }
 
@@ -118,12 +142,17 @@ export function ClientFormPage() {
               </Select>
             </Field>
             <div className="ic-form-actions">
-              <Button type="submit" variant="primary" disabled={saving}>
+              <Button type="submit" variant="primary" disabled={saving || removing}>
                 {saving ? 'Salvando…' : 'Salvar'}
               </Button>
-              <Button type="button" variant="ghost" disabled={saving} onClick={() => navigate('/clientes')}>
+              <Button type="button" variant="ghost" disabled={saving || removing} onClick={() => navigate('/clientes')}>
                 Cancelar
               </Button>
+              {!isNew ? (
+                <Button type="button" variant="danger" disabled={saving || removing} onClick={handleDelete}>
+                  {removing ? 'Excluindo…' : 'Excluir'}
+                </Button>
+              ) : null}
             </div>
           </form>
         </CardBody>

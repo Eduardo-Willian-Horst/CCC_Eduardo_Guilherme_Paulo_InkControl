@@ -21,6 +21,8 @@ export function TattooerFormPage() {
   const [artisticStyle, setArtisticStyle] = useState('')
   const [contact, setContact] = useState('')
   const [isActive, setIsActive] = useState('true')
+  const [originalIsActive, setOriginalIsActive] = useState('true')
+  const [removing, setRemoving] = useState(false)
 
   useEffect(() => {
     if (isNew) return
@@ -35,6 +37,7 @@ export function TattooerFormPage() {
         setArtisticStyle(t.artistic_style ?? '')
         setContact(t.contact ?? '')
         setIsActive(t.is_active ? 'true' : 'false')
+        setOriginalIsActive(t.is_active ? 'true' : 'false')
       } catch (e) {
         if (!cancelled) setError(e.message ?? String(e))
       } finally {
@@ -57,6 +60,12 @@ export function TattooerFormPage() {
       contact: contact.trim(),
       is_active: isActive === 'true',
     }
+    if (!isNew && originalIsActive === 'true' && isActive === 'false') {
+      if (!window.confirm('Inativar este tatuador?')) {
+        setSaving(false)
+        return
+      }
+    }
     try {
       if (isNew) {
         await apiFetch('/api/tattooers/', { method: 'POST', body: JSON.stringify(body) })
@@ -68,6 +77,21 @@ export function TattooerFormPage() {
       setError(err.message ?? String(err))
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function handleDelete() {
+    if (isNew) return
+    if (!window.confirm('Excluir este tatuador?')) return
+    setRemoving(true)
+    setError('')
+    try {
+      await apiFetch(`/api/tattooers/${id}/`, { method: 'DELETE' })
+      navigate('/tatuadores')
+    } catch (err) {
+      setError(err.message ?? String(err))
+    } finally {
+      setRemoving(false)
     }
   }
 
@@ -128,12 +152,17 @@ export function TattooerFormPage() {
               </Select>
             </Field>
             <div className="ic-form-actions">
-              <Button type="submit" variant="primary" disabled={saving}>
+              <Button type="submit" variant="primary" disabled={saving || removing}>
                 {saving ? 'Salvando…' : 'Salvar'}
               </Button>
-              <Button type="button" variant="ghost" disabled={saving} onClick={() => navigate('/tatuadores')}>
+              <Button type="button" variant="ghost" disabled={saving || removing} onClick={() => navigate('/tatuadores')}>
                 Cancelar
               </Button>
+              {!isNew ? (
+                <Button type="button" variant="danger" disabled={saving || removing} onClick={handleDelete}>
+                  {removing ? 'Excluindo…' : 'Excluir'}
+                </Button>
+              ) : null}
             </div>
           </form>
         </CardBody>

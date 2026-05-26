@@ -36,6 +36,7 @@ export async function apiFetch(path, { token, skipAuth, headers, ...init } = {})
   if (!res.ok) {
     const err = new Error(formatApiError(data))
     err.status = res.status
+    err.code = data?.code
     err.body = data
     throw err
   }

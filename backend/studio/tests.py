@@ -14,7 +14,15 @@ from rest_framework import status
 from rest_framework.authtoken.models import Token
 from rest_framework.test import APITestCase
 
-from studio.models import Appointment, Client, Tattooer, TokenActivity, UserProfile
+from studio.models import (
+    Appointment,
+    Client,
+    ClientHealthForm,
+    InAppNotification,
+    Tattooer,
+    TokenActivity,
+    UserProfile,
+)
 
 
 def register_studio_admin(client, email, studio_name="Estudio Teste", name="Admin"):
@@ -94,7 +102,6 @@ class AuthAndClientsAPITests(APITestCase):
             "tattooer": tattooer_response.data["id"],
             "scheduled_at": "2026-06-10T14:00:00-03:00",
             "description": "Fechamento braco",
-            "status": "confirmed",
         }
         first_appointment = self.client.post(
             reverse("appointment-list"),
@@ -109,6 +116,57 @@ class AuthAndClientsAPITests(APITestCase):
             format="json",
         )
         self.assertEqual(conflicting_appointment.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_client_appointment_create_notifies_studio(self):
+        register_response = register_studio_admin(
+            self.client, "studio.notif@inkcontrol.dev", "Estudio Notificacao"
+        )
+        studio_user = User.objects.get(email="studio.notif@inkcontrol.dev")
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {register_response.data['token']}")
+        tattooer = self.client.post(
+            reverse("tattooer-list"),
+            {
+                "name": "Tatuadora Notificacao",
+                "artistic_style": "Fineline",
+                "contact": "54977771111",
+            },
+            format="json",
+        ).data
+
+        self.client.credentials()
+        client_token = self.client.post(
+            reverse("register"),
+            {
+                "name": "Cliente Notificacao",
+                "email": "cliente.notif@inkcontrol.dev",
+                "password": "SenhaForte123",
+                "role": "client",
+            },
+            format="json",
+        ).data["token"]
+        client_record = Client.objects.get(email="cliente.notif@inkcontrol.dev")
+        ClientHealthForm.objects.create(client=client_record, allergies="Nenhuma")
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {client_token}")
+        response = self.client.post(
+            reverse("appointment-list"),
+            {
+                "tattooer": tattooer["id"],
+                "scheduled_at": "2026-10-09T10:00:00-03:00",
+                "appointment_kind": "consultation",
+                "description": "Avaliacao com imagem de referencia",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertTrue(
+            InAppNotification.objects.filter(
+                user=studio_user,
+                link=f"/agendamentos/{response.data['id']}/editar",
+                read=False,
+            ).exists()
+        )
 
     def test_appointment_period_filters_and_status_transition_rules(self):
         register_response = register_studio_admin(
@@ -144,6 +202,7 @@ class AuthAndClientsAPITests(APITestCase):
             "tattooer": tattooer_response.data["id"],
             "description": "Sessao teste",
             "status": "requested",
+            "appointment_kind": "consultation",
         }
         first_response = self.client.post(
             reverse("appointment-list"),
@@ -184,19 +243,16 @@ class AuthAndClientsAPITests(APITestCase):
         )
         self.assertEqual(invalid_transition.status_code, status.HTTP_400_BAD_REQUEST)
 
-        valid_transition_1 = self.client.patch(
-            reverse("appointment-detail", kwargs={"pk": appointment_id}),
-            {"status": "confirmed"},
+        valid_transition_1 = self.client.post(
+            reverse("appointment-confirm", kwargs={"pk": appointment_id}),
             format="json",
         )
-        valid_transition_2 = self.client.patch(
-            reverse("appointment-detail", kwargs={"pk": appointment_id}),
-            {"status": "in_progress"},
+        valid_transition_2 = self.client.post(
+            reverse("appointment-start", kwargs={"pk": appointment_id}),
             format="json",
         )
-        valid_transition_3 = self.client.patch(
-            reverse("appointment-detail", kwargs={"pk": appointment_id}),
-            {"status": "done"},
+        valid_transition_3 = self.client.post(
+            reverse("appointment-complete", kwargs={"pk": appointment_id}),
             format="json",
         )
         self.assertEqual(valid_transition_1.status_code, status.HTTP_200_OK)
@@ -242,11 +298,15 @@ class AuthAndClientsAPITests(APITestCase):
                 "tattooer": tattooer["id"],
                 "scheduled_at": "2026-08-10T14:00:00-03:00",
                 "description": "Leao realista",
-                "status": "confirmed",
+                "appointment_kind": "consultation",
             },
             format="json",
         )
         self.assertEqual(appointment.status_code, status.HTTP_201_CREATED)
+        self.client.post(
+            reverse("appointment-confirm", kwargs={"pk": appointment.data["id"]}),
+            format="json",
+        )
 
         appointments_search = self.client.get(
             reverse("appointment-list"),
@@ -308,6 +368,11 @@ class AuthAndClientsAPITests(APITestCase):
             },
             format="json",
         ).data["token"]
+        client_record = Client.objects.get(email="cliente.perm@inkcontrol.dev")
+        ClientHealthForm.objects.create(
+            client=client_record,
+            allergies="Sem alergias declaradas",
+        )
 
         tattooer_token = self.client.post(
             reverse("register"),
@@ -354,6 +419,109 @@ class AuthAndClientsAPITests(APITestCase):
         allowed_tattooer_list_clients = self.client.get(reverse("client-list"))
         self.assertEqual(allowed_tattooer_list_clients.status_code, status.HTTP_200_OK)
 
+    def test_client_must_request_consultation_before_session(self):
+        studio_token = register_studio_admin(
+            self.client, "studio.flow@inkcontrol.dev", "Estudio Fluxo"
+        ).data["token"]
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {studio_token}")
+        tattooer = self.client.post(
+            reverse("tattooer-list"),
+            {
+                "name": "Tatuadora Fluxo",
+                "artistic_style": "Blackwork",
+                "contact": "54911110000",
+            },
+            format="json",
+        ).data
+        self.client.credentials()
+
+        client_token = self.client.post(
+            reverse("register"),
+            {
+                "name": "Cliente Fluxo",
+                "email": "cliente.fluxo@inkcontrol.dev",
+                "password": "SenhaForte123",
+                "role": "client",
+            },
+            format="json",
+        ).data["token"]
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {client_token}")
+        no_health = self.client.post(
+            reverse("appointment-list"),
+            {
+                "tattooer": tattooer["id"],
+                "scheduled_at": "2026-10-11T10:00:00-03:00",
+                "appointment_kind": "consultation",
+            },
+            format="json",
+        )
+        self.assertEqual(no_health.status_code, status.HTTP_400_BAD_REQUEST)
+
+        client_record = Client.objects.get(email="cliente.fluxo@inkcontrol.dev")
+        ClientHealthForm.objects.create(
+            client=client_record,
+            allergies="Nenhuma",
+            healing_history="Boa",
+        )
+        session_without_consultation = self.client.post(
+            reverse("appointment-list"),
+            {
+                "tattooer": tattooer["id"],
+                "scheduled_at": "2026-10-12T10:00:00-03:00",
+                "appointment_kind": "service",
+            },
+            format="json",
+        )
+        self.assertEqual(
+            session_without_consultation.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+        consultation = self.client.post(
+            reverse("appointment-list"),
+            {
+                "tattooer": tattooer["id"],
+                "scheduled_at": "2026-10-11T10:00:00-03:00",
+                "appointment_kind": "consultation",
+            },
+            format="json",
+        )
+        self.assertEqual(consultation.status_code, status.HTTP_201_CREATED)
+        client_record.refresh_from_db()
+        self.assertEqual(client_record.studio_id, tattooer["studio"])
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {studio_token}")
+        direct_change = self.client.patch(
+            reverse("appointment-detail", kwargs={"pk": consultation.data["id"]}),
+            {
+                "scheduled_at": "2026-10-11T11:00:00-03:00",
+                "description": "Alterado pelo estudio",
+            },
+            format="json",
+        )
+        self.assertEqual(direct_change.status_code, status.HTTP_400_BAD_REQUEST)
+
+        confirmed = self.client.post(
+            reverse("appointment-confirm", kwargs={"pk": consultation.data["id"]}),
+            format="json",
+        )
+        self.assertEqual(confirmed.status_code, status.HTTP_200_OK)
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {client_token}")
+        session = self.client.post(
+            reverse("appointment-list"),
+            {
+                "tattooer": tattooer["id"],
+                "scheduled_at": "2026-10-12T10:00:00-03:00",
+                "appointment_kind": "service",
+            },
+            format="json",
+        )
+        self.assertEqual(session.status_code, status.HTTP_201_CREATED, session.data)
+        self.assertEqual(session.data["source_consultation"], consultation.data["id"])
+
 
 class SecurityAndUsersAPITests(APITestCase):
     def _register_studio(self, email="studio.sec@inkcontrol.dev"):
@@ -396,36 +564,11 @@ class SecurityAndUsersAPITests(APITestCase):
         expired = self.client.get(reverse("me"))
         self.assertEqual(expired.status_code, status.HTTP_401_UNAUTHORIZED)
 
-    def test_system_users_list_for_studio(self):
+    def test_studio_cannot_list_system_users(self):
         token = self._register_studio("sysusers@inkcontrol.dev")
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {token}")
-        client = self.client.post(
-            reverse("client-list"),
-            {
-                "name": "Cliente Lista",
-                "phone": "54911111111",
-                "email": "lista.cliente@inkcontrol.dev",
-            },
-            format="json",
-        ).data
-        tattooer = self.client.post(
-            reverse("tattooer-list"),
-            {"name": "T", "artistic_style": "X", "contact": "2"},
-            format="json",
-        ).data
-        self.client.post(
-            reverse("appointment-list"),
-            {
-                "client": client["id"],
-                "tattooer": tattooer["id"],
-                "scheduled_at": "2026-10-10T10:00:00-03:00",
-                "status": "requested",
-            },
-            format="json",
-        )
         r = self.client.get(reverse("system-users"), {"role": "client"})
-        self.assertEqual(r.status_code, status.HTTP_200_OK)
-        self.assertGreaterEqual(r.data["count"], 1)
+        self.assertEqual(r.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_tattooer_cannot_inactivate_with_appointments(self):
         token = self._register_studio("tat.inact@inkcontrol.dev")
@@ -454,7 +597,6 @@ class SecurityAndUsersAPITests(APITestCase):
                 "client": client["id"],
                 "tattooer": tattooer["id"],
                 "scheduled_at": "2026-11-01T10:00:00-03:00",
-                "status": "confirmed",
             },
             format="json",
         )
@@ -488,18 +630,27 @@ class SecurityAndUsersAPITests(APITestCase):
         listed = self.client.get(reverse("health-form-list"))
         self.assertEqual(listed.data["count"], 0)
 
-    def test_portfolio_image_create(self):
-        token = self._register_studio("port@inkcontrol.dev")
+    def test_client_can_send_reference_image_only_on_evaluation_request(self):
+        token = self._register_studio("ref@inkcontrol.dev")
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {token}")
-        client = self.client.post(
-            reverse("client-list"),
-            {
-                "name": "P",
-                "phone": "8",
-                "email": "port.cliente@inkcontrol.dev",
-            },
+        tattooer = self.client.post(
+            reverse("tattooer-list"),
+            {"name": "T", "artistic_style": "X", "contact": "2"},
             format="json",
         ).data
+        self.client.credentials()
+        client_token = self.client.post(
+            reverse("register"),
+            {
+                "name": "Cliente Ref",
+                "email": "ref.cliente@inkcontrol.dev",
+                "password": "SenhaForte123",
+                "role": "client",
+            },
+            format="json",
+        ).data["token"]
+        client_record = Client.objects.get(email="ref.cliente@inkcontrol.dev")
+        ClientHealthForm.objects.create(client=client_record, allergies="Nenhuma")
         from io import BytesIO
 
         from django.core.files.uploadedfile import SimpleUploadedFile
@@ -512,12 +663,19 @@ class SecurityAndUsersAPITests(APITestCase):
             buf.getvalue(),
             content_type="image/png",
         )
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {client_token}")
         r = self.client.post(
-            reverse("portfolio-image-list"),
-            {"client": client["id"], "image": upload, "caption": "ref"},
+            reverse("appointment-list"),
+            {
+                "tattooer": tattooer["id"],
+                "scheduled_at": "2026-12-02T10:00:00-03:00",
+                "appointment_kind": "consultation",
+                "reference_image": upload,
+            },
             format="multipart",
         )
         self.assertEqual(r.status_code, status.HTTP_201_CREATED, r.data)
+        self.assertTrue(r.data["reference_image"])
 
 
 class ExtendedBackendAPITests(APITestCase):
@@ -530,7 +688,7 @@ class ExtendedBackendAPITests(APITestCase):
         self.assertEqual(r.status_code, status.HTTP_200_OK)
         self.assertIn("X-Response-Time-Ms", r)
 
-    def test_hu12_consultation_requires_flag(self):
+    def test_every_studio_allows_consultation_requests(self):
         token = self._studio_token("hu12@inkcontrol.dev")
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {token}")
         client = self.client.post(
@@ -543,22 +701,6 @@ class ExtendedBackendAPITests(APITestCase):
             {"name": "T", "artistic_style": "X", "contact": "2"},
             format="json",
         ).data
-        denied = self.client.post(
-            reverse("appointment-list"),
-            {
-                "client": client["id"],
-                "tattooer": tattooer["id"],
-                "scheduled_at": "2026-12-01T10:00:00-03:00",
-                "appointment_kind": "consultation",
-            },
-            format="json",
-        )
-        self.assertEqual(denied.status_code, status.HTTP_400_BAD_REQUEST)
-        self.client.patch(
-            reverse("studio-settings"),
-            {"offers_consultation": True},
-            format="json",
-        )
         ok = self.client.post(
             reverse("appointment-list"),
             {
@@ -584,7 +726,7 @@ class ExtendedBackendAPITests(APITestCase):
         )
         self.assertEqual(r.status_code, status.HTTP_201_CREATED)
         self.assertEqual(r.data["studio"]["name"], "Novo Estudio")
-        self.assertFalse(r.data["settings"]["offers_consultation"])
+        self.assertTrue(r.data["settings"]["offers_consultation"])
 
     def test_change_request_accept_sends_email(self):
         from unittest.mock import patch
@@ -607,7 +749,6 @@ class ExtendedBackendAPITests(APITestCase):
                 "client": client["id"],
                 "tattooer": tattooer["id"],
                 "scheduled_at": "2026-12-05T10:00:00-03:00",
-                "status": "confirmed",
             },
             format="json",
         ).data
@@ -660,7 +801,7 @@ class ExtendedBackendAPITests(APITestCase):
         self.assertIn("paid_until", r.data)
         self.assertIn("studio_id", r.data)
 
-    def test_delete_account_removes_client_record(self):
+    def test_studio_cannot_delete_account_user(self):
         token = self._studio_token("delacc@inkcontrol.dev")
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {token}")
         email = "del.cliente@inkcontrol.dev"
@@ -685,8 +826,8 @@ class ExtendedBackendAPITests(APITestCase):
         )
         self.assertTrue(Client.objects.filter(email=email).exists())
         del_r = self.client.delete(reverse("account-detail", kwargs={"pk": u.pk}))
-        self.assertEqual(del_r.status_code, status.HTTP_204_NO_CONTENT)
-        self.assertFalse(Client.objects.filter(email=email).exists())
+        self.assertEqual(del_r.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertTrue(Client.objects.filter(email=email).exists())
 
     def test_tenant_isolation_clients(self):
         t1 = self._studio_token("tenant1@inkcontrol.dev")

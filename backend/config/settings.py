@@ -89,6 +89,9 @@ else:
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
             "NAME": BASE_DIR / "db.sqlite3",
+            "OPTIONS": {
+                "timeout": 20,
+            },
         }
     }
 
@@ -146,7 +149,7 @@ SUBSCRIPTION_GATE_ENABLED = os.environ.get("SUBSCRIPTION_GATE_ENABLED", "true").
 )
 SUBSCRIPTION_BILLING_PERIOD_DAYS = int(os.environ.get("SUBSCRIPTION_BILLING_PERIOD_DAYS", "30"))
 
-# Producao (R2/S3): defina AWS_* no .env — imagens de agendamento e portfolio vao ao bucket.
+# Producao (R2/S3): defina AWS_* no .env — imagens de referencia do agendamento vao ao bucket.
 if os.environ.get("AWS_STORAGE_BUCKET_NAME"):
     INSTALLED_APPS = list(INSTALLED_APPS) + ["storages"]
     STORAGES = {
@@ -185,7 +188,10 @@ CORS_ALLOWED_ORIGINS = [
     if o.strip()
 ]
 
-ENABLE_EMAIL_SCHEDULER = os.environ.get("ENABLE_EMAIL_SCHEDULER", "").lower() in (
+ENABLE_EMAIL_SCHEDULER = os.environ.get(
+    "ENABLE_EMAIL_SCHEDULER",
+    "true" if DEBUG else "false",
+).lower() in (
     "1",
     "true",
     "yes",
@@ -193,6 +199,9 @@ ENABLE_EMAIL_SCHEDULER = os.environ.get("ENABLE_EMAIL_SCHEDULER", "").lower() in
 SCHEDULER_INTERVAL_MINUTES = int(os.environ.get("SCHEDULER_INTERVAL_MINUTES", "5"))
 
 TOKEN_INACTIVITY_MINUTES = int(os.environ.get("TOKEN_INACTIVITY_MINUTES", "30"))
+TOKEN_ACTIVITY_TOUCH_INTERVAL_SECONDS = int(
+    os.environ.get("TOKEN_ACTIVITY_TOUCH_INTERVAL_SECONDS", "60")
+)
 LOGIN_MAX_FAILED_ATTEMPTS = int(os.environ.get("LOGIN_MAX_FAILED_ATTEMPTS", "5"))
 LOGIN_LOCKOUT_MINUTES = int(os.environ.get("LOGIN_LOCKOUT_MINUTES", "15"))
 

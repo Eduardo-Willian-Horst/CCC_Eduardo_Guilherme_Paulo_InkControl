@@ -1,8 +1,8 @@
 # InkControl
 
-Sistema web para gestão de estúdio de tatuagem (agendamentos, clientes, tatuadores, portfólio, saúde do cliente), conforme o **Documento de Visão do Produto** do projeto acadêmico.
+Sistema web para gestão de estúdio de tatuagem (avaliações, agendamentos, clientes, tatuadores e saúde do cliente), conforme o **Documento de Visão do Produto** do projeto acadêmico.
 
-**Stack:** React 18 · Django 5 + Django REST Framework · PostgreSQL 17 (ou SQLite para desenvolvimento rápido).
+**Stack:** React · Django 5 + Django REST Framework · PostgreSQL 17 (ou SQLite para desenvolvimento rápido).
 
 ## Pré-requisitos
 
@@ -62,7 +62,7 @@ Abra [http://localhost:5173](http://localhost:5173). O Vite encaminha `/api` par
 
 ### Autenticação
 
-- `POST /api/auth/register/` — cliente/tatuador (vinculado ao estúdio padrão)
+- `POST /api/auth/register/` — cliente no fluxo público
 - `POST /api/studios/register/` — **novo estúdio** (tenant) + administrador
 - `POST /api/auth/login/` · `GET /api/auth/me/` · `POST /api/auth/logout/`
 - Recuperação de senha: `POST /api/auth/password-reset/request/` e `confirm/`
@@ -70,27 +70,30 @@ Abra [http://localhost:5173](http://localhost:5173). O Vite encaminha `/api` par
 ### Estúdio (multi-tenant)
 
 - `GET/PATCH /api/studios/{id}/` — dados do estúdio (admin do próprio tenant)
-- `GET/PATCH /api/studio-settings/?studio={id}` — expediente e **`offers_consultation`** 
+- `GET/PATCH /api/studio-settings/?studio={id}` — expediente do estúdio
 - `GET/POST /api/studio/subscription/` — mensalidade **por estúdio**
 
 ### Cadastros e agenda
 
 - CRUD `/api/clients/`, `/api/tattooers/`, `/api/appointments/`
 - `POST /api/appointments/{id}/cancel/`
+- `POST /api/appointments/{id}/confirm/`, `start/`, `complete/` — ações do fluxo, sem mudança manual de status
+- `GET/POST/PATCH /api/appointments/{id}/budget/` — orçamento da sessão
+- `POST /api/appointments/{id}/budget/accept/` e `budget/reject/` — resposta do cliente
 - `GET/POST /api/appointment-change-requests/` + `accept/` / `reject/`
-- `GET/POST /api/portfolio-images/?client=` — referências no perfil do cliente 
-- `GET /api/system-users/` — lista unificada (papel `studio`)
-- `GET/PATCH/DELETE /api/accounts/{id}/` — contas de login
 
 ### Segurança
 
 - Token expira após inatividade (`TOKEN_INACTIVITY_MINUTES`, padrão 30)
 - Bloqueio de login após tentativas inválidas (`LOGIN_MAX_FAILED_ATTEMPTS`, `LOGIN_LOCKOUT_MINUTES`)
 
-### Avaliação
+### Fluxo de avaliação e sessão
 
-- `offers_consultation` em `studio-settings` (PATCH pelo estúdio)
-- Agendamento com `appointment_kind=consultation` só é aceito se a flag estiver ativa
+- Todo estúdio oferece avaliação; não há opção para desativar.
+- O cliente primeiro solicita uma **avaliação** e pode anexar uma imagem de referência na solicitação.
+- Depois de uma avaliação aprovada, o cliente pode solicitar uma **sessão** com o mesmo profissional.
+- O estúdio/tatuador envia o orçamento da sessão; o cliente aceita ou recusa.
+- Se o cliente aceitar o orçamento, a sessão é confirmada automaticamente.
 
 ### Ficha de saúde 
 
@@ -98,31 +101,27 @@ Abra [http://localhost:5173](http://localhost:5173). O Vite encaminha `/api` par
 - Papel **tatuador**: vê fichas de clientes com sessão com ele no estúdio
 - Papel **client**: vê/edita a própria ficha
 
-### E-mails e tarefas agendadas 
+### Notificações, e-mails e tarefas agendadas 
 
 Configure SMTP no `.env` (ver `.env.example`).
 
-**Opção A — agendador no processo Django (dev/servidor único):**
+No MVP acadêmico, as tarefas recorrentes rodam dentro do próprio processo iniciado por `runserver`. Em desenvolvimento, o agendador interno já fica ligado por padrão.
 
 ```env
-ENABLE_EMAIL_SCHEDULER=true
-SCHEDULER_INTERVAL_MINUTES=5
+# Opcional: ajuste o intervalo ou desligue se precisar.
+# ENABLE_EMAIL_SCHEDULER=false
+# SCHEDULER_INTERVAL_MINUTES=5
 ```
 
-**Opção B — cron / Agendador de Tarefas (produção):**
+O `runserver` executa lembretes (~30 min antes) e purge de imagens de referência anexadas ao agendamento.
 
-```powershell
-python manage.py run_scheduled_tasks
-```
-
-Esse comando executa lembretes (~30 min antes), purge de imagens de agendamento e purge de portfólio (7 dias após sessão concluída).
+Notificações in-app são geradas quando qualquer lado age em um agendamento: criação, edição permitida, cancelamento, mudança de status, orçamento, aceite/recusa de orçamento e contrapropostas.
 
 E-mails também são enviados em: criação/cancelamento/status de agendamento, solicitação de alteração, **aceite** e **recusa** de alteração.
 
 ### Retenção de imagens 
 
 - `purge_expired_appointment_reference_images` — imagens do agendamento
-- `purge_expired_client_portfolio_images` — portfólio do cliente
 
 ### Monitoramento 
 
@@ -130,9 +129,9 @@ Respostas incluem o header `X-Response-Time-Ms` (tempo de processamento no servi
 
 ### Permissões por papel
 
-- **studio**: CRUD completo no tenant; lista unificada de usuários; assinatura
+- **studio**: CRUD operacional no tenant, pedidos, orçamento, agenda e assinatura
 - **tattooer**: agenda e clientes do escopo de atendimento; alterações via change-request
-- **client**: agendar, portfólio e ficha próprios
+- **client**: solicitar avaliação/sessão e manter a própria ficha de saúde
 
 Header autenticado: `Authorization: Token <seu_token>`
 
@@ -141,7 +140,7 @@ Header autenticado: `Authorization: Token <seu_token>`
 | Pasta | Conteúdo |
 |--------|-----------|
 | `backend/` | Django (`config/`), app `studio` |
-| `frontend/` | React 18 + Vite |
+| `frontend/` | React + Vite |
 | `requirements.txt` | Dependências Python |
 
 ## Backend — revisão e boas práticas
@@ -151,6 +150,8 @@ Ver **`backend/README.md`**: arquitetura, fluxo HTTP, multi-tenant, RBAC, agenda
 ### Orçamento (`waiting_budget`)
 
 - `GET/POST/PATCH /api/appointments/{id}/budget/` — envio de valor e notas (estúdio/tatuador)
+- `POST /api/appointments/{id}/budget/accept/` — cliente aceita e confirma a sessão
+- `POST /api/appointments/{id}/budget/reject/` — cliente recusa e cancela a solicitação
 
 ### Pagamento simulado
 
@@ -162,7 +163,7 @@ Se `migrate` falhar por `studio_studio` legado (`default_open_time`, etc.):
 
 ```powershell
 cd backend
-python manage.py reconcile_legacy_database
+..\.venv\Scripts\python.exe manage.py reconcile_legacy_database
 ```
 
 ## Pendências conhecidas (backend)

@@ -21,7 +21,6 @@ from .models import (
     AppointmentChangeRequest,
     Client,
     ClientHealthForm,
-    ClientPortfolioImage,
     InAppNotification,
     Studio,
     StudioSettings,
@@ -182,33 +181,6 @@ class AccountUserSerializer(serializers.ModelSerializer):
         return data
 
 
-class ClientPortfolioImageSerializer(serializers.ModelSerializer):
-    MAX_IMAGE_BYTES = 5 * 1024 * 1024
-    image_url = serializers.SerializerMethodField()
-
-    class Meta:
-        model = ClientPortfolioImage
-        fields = ["id", "client", "image", "image_url", "caption", "created_at"]
-        read_only_fields = ["id", "image_url", "created_at"]
-        extra_kwargs = {"image": {"required": True}}
-
-    def get_image_url(self, obj):
-        if not obj.image:
-            return None
-        request = self.context.get("request")
-        url = obj.image.url
-        if request:
-            return request.build_absolute_uri(url)
-        return url
-
-    def validate_image(self, value):
-        try:
-            validate_uploaded_image(value)
-        except ServiceValidationError as exc:
-            raise service_error_to_drf(exc) from exc
-        return value
-
-
 class ClientBriefSerializer(serializers.ModelSerializer):
     class Meta:
         model = Client
@@ -226,6 +198,7 @@ class AppointmentReadSerializer(serializers.ModelSerializer):
     tattooer = TattooerBriefSerializer(read_only=True)
     reference_image = serializers.SerializerMethodField()
     health_summary = serializers.SerializerMethodField()
+    source_consultation_summary = serializers.SerializerMethodField()
 
     class Meta:
         model = Appointment
@@ -239,6 +212,8 @@ class AppointmentReadSerializer(serializers.ModelSerializer):
             "appointment_kind",
             "duration_minutes",
             "reference_image",
+            "source_consultation",
+            "source_consultation_summary",
             "health_summary",
             "health_snapshot",
             "budget_amount",
@@ -276,6 +251,16 @@ class AppointmentReadSerializer(serializers.ModelSerializer):
             "has_alerts": bool(allergies or chronic),
         }
 
+    def get_source_consultation_summary(self, obj):
+        consultation = getattr(obj, "source_consultation", None)
+        if consultation is None:
+            return None
+        return {
+            "id": consultation.id,
+            "scheduled_at": consultation.scheduled_at,
+            "status": consultation.status,
+        }
+
 
 class AppointmentBudgetSerializer(serializers.Serializer):
     """Corpo de POST/PATCH /api/appointments/{id}/budget/."""
@@ -300,6 +285,7 @@ class AppointmentSerializer(serializers.ModelSerializer):
             "appointment_kind",
             "duration_minutes",
             "reference_image",
+            "source_consultation",
             "health_snapshot",
             "budget_amount",
             "budget_currency",
@@ -311,6 +297,7 @@ class AppointmentSerializer(serializers.ModelSerializer):
         read_only_fields = [
             "id",
             "health_snapshot",
+            "source_consultation",
             "budget_amount",
             "budget_currency",
             "budget_notes",
@@ -367,11 +354,16 @@ class AppointmentSerializer(serializers.ModelSerializer):
 
 
 class ClientHealthFormSerializer(serializers.ModelSerializer):
+    client_name = serializers.CharField(source="client.name", read_only=True)
+    client_email = serializers.EmailField(source="client.email", read_only=True)
+
     class Meta:
         model = ClientHealthForm
         fields = [
             "id",
             "client",
+            "client_name",
+            "client_email",
             "allergies",
             "chronic_diseases",
             "healing_history",

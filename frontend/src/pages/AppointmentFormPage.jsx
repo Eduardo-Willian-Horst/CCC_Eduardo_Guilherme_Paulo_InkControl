@@ -1,13 +1,17 @@
-import { useEffect, useMemo, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { apiFetch } from '../api/client'
 import {
   APPOINTMENT_KIND_LABELS,
   APPOINTMENT_STATUS_LABELS,
   ROLES,
-  STATUS_TRANSITIONS,
 } from '../lib/constants'
-import { formatDateTime, fromDatetimeLocalValue, toDatetimeLocalValue } from '../lib/format'
+import {
+  formatBudgetAmount,
+  formatDateTime,
+  fromDatetimeLocalValue,
+  toDatetimeLocalValue,
+} from '../lib/format'
 import { fetchAllPaginated } from '../lib/fetchAllPaginated'
 import { tattooerPortraitSrc } from '../lib/tattooerPortrait'
 import { Alert } from '../components/ui/Alert'
@@ -35,6 +39,8 @@ function tattooerBriefFromAppointment(a) {
   return null
 }
 
+const VALID_CONSULTATION_STATUSES = new Set(['confirmed', 'done'])
+
 export function AppointmentFormPage() {
   const { id: appointmentId, tattooerId: tattooerIdFromUrl } = useParams()
   const isNew = !appointmentId
@@ -48,7 +54,9 @@ export function AppointmentFormPage() {
   const [saving, setSaving] = useState(false)
   const [removing, setRemoving] = useState(false)
   const [cancelling, setCancelling] = useState(false)
+  const [actionBusy, setActionBusy] = useState('')
   const [error, setError] = useState('')
+  const [flowMessage, setFlowMessage] = useState('')
 
   const [clients, setClients] = useState([])
 
@@ -61,6 +69,13 @@ export function AppointmentFormPage() {
   const [referenceImageFile, setReferenceImageFile] = useState(null)
   const [referenceImageUrl, setReferenceImageUrl] = useState('')
   const [healthSummary, setHealthSummary] = useState(null)
+  const [budgetAmount, setBudgetAmount] = useState('')
+  const [budgetNotes, setBudgetNotes] = useState('')
+  const [budgetSentAt, setBudgetSentAt] = useState('')
+  const [budgetSaving, setBudgetSaving] = useState(false)
+  const [budgetResponding, setBudgetResponding] = useState('')
+  const [budgetMessage, setBudgetMessage] = useState('')
+  const [sourceConsultationSummary, setSourceConsultationSummary] = useState(null)
 
   const [changeRequests, setChangeRequests] = useState([])
   const [crKey, setCrKey] = useState(0)
@@ -85,6 +100,14 @@ export function AppointmentFormPage() {
           if (cancelled) return
           setPresetTattooer(t)
           setTattooerId(String(t.id))
+          if (user.role === ROLES.client && isNew) {
+            const consultations = await fetchAllPaginated(
+              `/api/appointments/?tattooer=${t.id}&appointment_kind=consultation`,
+            )
+            if (cancelled) return
+            const valid = consultations.some((a) => VALID_CONSULTATION_STATUSES.has(a.status))
+            setAppointmentKind(valid ? 'service' : 'consultation')
+          }
         } else if (!isNew) {
           setPresetTattooer(null)
         } else {
@@ -129,6 +152,10 @@ export function AppointmentFormPage() {
           setUpdatedAt(a.updated_at ?? '')
           setReferenceImageUrl(a.reference_image ?? '')
           setHealthSummary(a.health_summary ?? null)
+          setBudgetAmount(a.budget_amount != null ? String(a.budget_amount) : '')
+          setBudgetNotes(a.budget_notes ?? '')
+          setBudgetSentAt(a.budget_sent_at ?? '')
+          setSourceConsultationSummary(a.source_consultation_summary ?? null)
           setBaseline({
             scheduled_at: a.scheduled_at,
             description: a.description ?? '',
@@ -179,16 +206,25 @@ export function AppointmentFormPage() {
   const isStudio = me?.role === ROLES.studio
   const isClient = me?.role === ROLES.client
   const canDelete = isStudio && !isNew
+  const canRespondBudget = isClient && status === 'waiting_budget' && Boolean(budgetAmount)
 
   const showTattooerSelect = !(fromTattooerPage && isNew) && !isClient
   const showClientPicker = (isStudio || (isTattooer && !isNew)) && !isClient
 
-  const statusOptions = useMemo(() => {
-    if (isNew) return ['requested']
-    const next = STATUS_TRANSITIONS[status] ?? []
-    const uniq = new Set([status, ...next])
-    return Array.from(uniq)
-  }, [isNew, status])
+  const isPendingStudioRequest = isStudio && !isNew && baseline?.status === 'requested'
+  const canConfirmConsultation =
+    (isStudio || isTattooer) && !isNew && status === 'requested' && appointmentKind === 'consultation'
+  const canStartAppointment = (isStudio || isTattooer) && !isNew && status === 'confirmed'
+  const canCompleteAppointment = (isStudio || isTattooer) && !isNew && status === 'in_progress'
+  const canAttachReferenceImage = isTattooer
+    ? !isNew
+    : !isClient || isNew || appointmentKind === 'consultation'
+  const referenceImageLabel = isClient
+    ? 'Imagem de referência da solicitação (opcional)'
+    : 'Imagem de referência (opcional)'
+  const referenceImageHint = isClient
+    ? 'Envie uma referência visual para o profissional entender sua ideia.'
+    : ''
 
   function goBack() {
     if (fromTattooerPage && tattooerIdFromUrl) {
@@ -210,6 +246,10 @@ export function AppointmentFormPage() {
     setReferenceImageUrl(a.reference_image ?? '')
     setHealthSummary(a.health_summary ?? null)
     setAppointmentKind(a.appointment_kind ?? 'service')
+    setBudgetAmount(a.budget_amount != null ? String(a.budget_amount) : '')
+    setBudgetNotes(a.budget_notes ?? '')
+    setBudgetSentAt(a.budget_sent_at ?? '')
+    setSourceConsultationSummary(a.source_consultation_summary ?? null)
     const brief = tattooerBriefFromAppointment(a)
     if (brief) setPresetTattooer(brief)
     setBaseline({
@@ -223,22 +263,27 @@ export function AppointmentFormPage() {
     })
   }
 
+  async function ensureClientHealthForm() {
+    const data = await apiFetch('/api/health-forms/?page=1')
+    const rows = data.results ?? []
+    if (rows.length === 0) {
+      throw new Error('Preencha sua ficha de saúde antes de solicitar um agendamento.')
+    }
+  }
+
   async function handleSubmit(e) {
     e.preventDefault()
     setSaving(true)
     setError('')
     try {
+      if (isNew && isClient) {
+        await ensureClientHealthForm()
+      }
       if (!isNew && !isStudio && me) {
         if (!baseline) {
           setError('Aguarde o carregamento dos dados antes de salvar.')
           setSaving(false)
           return
-        }
-        if (status !== baseline.status) {
-          await apiFetch(`/api/appointments/${appointmentId}/`, {
-            method: 'PATCH',
-            body: JSON.stringify({ status }),
-          })
         }
         const scheduledIso = fromDatetimeLocalValue(scheduledLocal)
         const proposedChanges = {}
@@ -256,8 +301,7 @@ export function AppointmentFormPage() {
         }
         const hasImage = Boolean(referenceImageFile)
         const hasAgenda = Object.keys(proposedChanges).length > 0 || hasImage
-        const statusChanged = status !== baseline.status
-        if (!statusChanged && !hasAgenda) {
+        if (!hasAgenda) {
           setError('Nenhuma alteração para salvar.')
           setSaving(false)
           return
@@ -276,6 +320,11 @@ export function AppointmentFormPage() {
       }
 
       if (isStudio && !isNew) {
+        if (isPendingStudioRequest) {
+          setError('Para mudar esta solicitação, use contraproposta, orçamento ou uma ação do fluxo.')
+          setSaving(false)
+          return
+        }
         const scheduled_at = fromDatetimeLocalValue(scheduledLocal)
         const useMultipart = Boolean(referenceImageFile)
         if (useMultipart) {
@@ -283,7 +332,6 @@ export function AppointmentFormPage() {
           fd.append('tattooer', String(Number(tattooerId)))
           fd.append('scheduled_at', scheduled_at)
           fd.append('description', description)
-          fd.append('status', status)
           fd.append('appointment_kind', appointmentKind)
           fd.append('client', String(Number(clientId)))
           fd.append('reference_image', referenceImageFile)
@@ -298,7 +346,6 @@ export function AppointmentFormPage() {
               tattooer: Number(tattooerId),
               scheduled_at,
               description,
-              status,
               appointment_kind: appointmentKind,
               client: Number(clientId),
             }),
@@ -315,7 +362,6 @@ export function AppointmentFormPage() {
         fd.append('tattooer', String(Number(tattooerId)))
         fd.append('scheduled_at', scheduled_at)
         fd.append('description', description)
-        fd.append('status', status)
         fd.append('appointment_kind', appointmentKind)
         if (!(isClient && isNew)) {
           fd.append('client', String(Number(clientId)))
@@ -329,7 +375,6 @@ export function AppointmentFormPage() {
           tattooer: Number(tattooerId),
           scheduled_at,
           description,
-          status,
           appointment_kind: appointmentKind,
         }
         if (!(isClient && isNew)) {
@@ -375,6 +420,22 @@ export function AppointmentFormPage() {
       setError(err.message ?? String(err))
     } finally {
       setCancelling(false)
+    }
+  }
+
+  async function handleStatusAction(action, successMessage) {
+    if (!appointmentId) return
+    setActionBusy(action)
+    setError('')
+    setFlowMessage('')
+    try {
+      await apiFetch(`/api/appointments/${appointmentId}/${action}/`, { method: 'POST' })
+      await reloadAppointmentDetail()
+      setFlowMessage(successMessage)
+    } catch (err) {
+      setError(err.message ?? String(err))
+    } finally {
+      setActionBusy('')
     }
   }
 
@@ -428,6 +489,67 @@ export function AppointmentFormPage() {
     }
   }
 
+  async function handleSubmitBudget(e) {
+    e.preventDefault()
+    if (isNew || !appointmentId) return
+    setBudgetSaving(true)
+    setBudgetMessage('')
+    setError('')
+    try {
+      const updated = await apiFetch(`/api/appointments/${appointmentId}/budget/`, {
+        method: budgetSentAt ? 'PATCH' : 'POST',
+        body: JSON.stringify({
+          budget_amount: budgetAmount,
+          budget_notes: budgetNotes,
+          move_to_waiting_budget: true,
+        }),
+      })
+      setBudgetAmount(updated.budget_amount != null ? String(updated.budget_amount) : '')
+      setBudgetNotes(updated.budget_notes ?? '')
+      setBudgetSentAt(updated.budget_sent_at ?? '')
+      setStatus(updated.status ?? status)
+      setBudgetMessage('Orçamento enviado ao cliente.')
+      await reloadAppointmentDetail()
+    } catch (err) {
+      setError(err.message ?? String(err))
+    } finally {
+      setBudgetSaving(false)
+    }
+  }
+
+  async function handleAcceptBudget() {
+    if (!appointmentId) return
+    setBudgetResponding('accept')
+    setBudgetMessage('')
+    setError('')
+    try {
+      await apiFetch(`/api/appointments/${appointmentId}/budget/accept/`, { method: 'POST' })
+      setBudgetMessage('Orçamento aceito. A sessão foi confirmada.')
+      await reloadAppointmentDetail()
+    } catch (err) {
+      setError(err.message ?? String(err))
+    } finally {
+      setBudgetResponding('')
+    }
+  }
+
+  async function handleRejectBudget() {
+    if (!appointmentId) return
+    if (!window.confirm('Recusar este orçamento? A solicitação será cancelada.')) return
+    setBudgetResponding('reject')
+    setBudgetMessage('')
+    setError('')
+    try {
+      await apiFetch(`/api/appointments/${appointmentId}/budget/reject/`, { method: 'POST' })
+      setBudgetMessage('Orçamento recusado. A solicitação foi cancelada.')
+      await reloadAppointmentDetail()
+    } catch (err) {
+      setError(err.message ?? String(err))
+    } finally {
+      setBudgetResponding('')
+    }
+  }
+
   if (loading) {
     return (
       <div className="ic-loading-block">
@@ -442,6 +564,90 @@ export function AppointmentFormPage() {
 
   const canExplicitCancel =
     !isNew && status !== 'cancelled' && status !== 'done' && (isStudio || isClient || isTattooer)
+  const newClientRequestLabel = appointmentKind === 'service' ? 'sessão' : 'avaliação'
+  const shouldShowBudgetCard =
+    !isNew && appointmentKind === 'service' && (isStudio || isTattooer || budgetAmount)
+  const shouldPrioritizeBudget = canRespondBudget
+
+  function renderBudgetCard() {
+    return (
+      <Card className="ic-mt-4">
+        <CardHeader>
+          <h2>Orçamento</h2>
+        </CardHeader>
+        <CardBody>
+          {budgetMessage ? (
+            <div className="ic-mb-2">
+              <Alert>{budgetMessage}</Alert>
+            </div>
+          ) : null}
+          {isStudio || isTattooer ? (
+            <form onSubmit={handleSubmitBudget}>
+              <Field label="Valor" id="a-budget-amount">
+                <Input
+                  id="a-budget-amount"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  required
+                  value={budgetAmount}
+                  onChange={(e) => setBudgetAmount(e.target.value)}
+                />
+              </Field>
+              <Field label="Observações do orçamento" id="a-budget-notes">
+                <Textarea
+                  id="a-budget-notes"
+                  rows={3}
+                  value={budgetNotes}
+                  onChange={(e) => setBudgetNotes(e.target.value)}
+                />
+              </Field>
+              {budgetSentAt ? (
+                <p className="ic-muted ic-mt-4">Enviado em {formatDateTime(budgetSentAt)}</p>
+              ) : null}
+              <div className="ic-form-actions">
+                <Button type="submit" variant="primary" disabled={budgetSaving}>
+                  {budgetSaving
+                    ? 'Enviando…'
+                    : budgetSentAt
+                      ? 'Atualizar orçamento'
+                      : 'Enviar orçamento'}
+                </Button>
+              </div>
+            </form>
+          ) : (
+            <>
+              <p className="ic-kpi-value">{formatBudgetAmount(budgetAmount)}</p>
+              {budgetNotes ? <p className="ic-muted ic-mt-4">{budgetNotes}</p> : null}
+              {budgetSentAt ? (
+                <p className="ic-muted ic-mt-4">Enviado em {formatDateTime(budgetSentAt)}</p>
+              ) : null}
+              {canRespondBudget ? (
+                <div className="ic-form-actions">
+                  <Button
+                    type="button"
+                    variant="primary"
+                    disabled={Boolean(budgetResponding)}
+                    onClick={handleAcceptBudget}
+                  >
+                    {budgetResponding === 'accept' ? 'Aceitando…' : 'Aceitar orçamento'}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={Boolean(budgetResponding)}
+                    onClick={handleRejectBudget}
+                  >
+                    {budgetResponding === 'reject' ? 'Recusando…' : 'Recusar orçamento'}
+                  </Button>
+                </div>
+              ) : null}
+            </>
+          )}
+        </CardBody>
+      </Card>
+    )
+  }
 
   return (
     <>
@@ -449,16 +655,18 @@ export function AppointmentFormPage() {
         <div>
           <h1 className="ic-page__title">
             {isNew && fromTattooerPage && presetTattooer
-              ? `Agendar com ${presetTattooer.name}`
+              ? `Solicitar ${newClientRequestLabel} com ${presetTattooer.name}`
               : isNew
                 ? 'Novo agendamento'
                 : 'Agendamento'}
           </h1>
           <p className="ic-page__lede">
             {isTattooer && !isNew
-              ? 'Atualize o status diretamente. Alterações em data, descrição, modalidade ou imagem geram uma solicitação para o cliente ou estúdio aceitar.'
+              ? 'Use as ações do fluxo para confirmar, iniciar ou concluir. Alterações em data, descrição, modalidade ou imagem geram uma solicitação para aceite.'
               : isClient && isNew
-                ? 'Escolha data e horário. O estúdio confirma orçamento e detalhes finais.'
+                ? appointmentKind === 'service'
+                  ? 'Você já tem uma avaliação aprovada com este profissional. Solicite a sessão; o estúdio enviará um orçamento para sua resposta.'
+                  : 'A primeira etapa é uma avaliação. O profissional consulta sua ficha de saúde antes de liberar uma sessão.'
                 : !isNew && !isStudio && isClient
                   ? 'Alterações em data, descrição, modalidade ou imagem são enviadas como solicitação; a outra parte precisa aceitar antes de valer.'
                   : 'Datas em conflito com o mesmo tatuador são bloqueadas automaticamente.'}
@@ -481,6 +689,30 @@ export function AppointmentFormPage() {
         </div>
       ) : null}
 
+      {isNew && isClient ? (
+        <div className="ic-mb-2">
+          <Alert>
+            {appointmentKind === 'service'
+                    ? 'Você está solicitando uma sessão. Anexe uma referência se quiser e aguarde o orçamento do estúdio.'
+              : 'Você está solicitando uma avaliação. Mantenha sua '}
+            {appointmentKind === 'consultation' ? <Link to="/fichas-saude">ficha de saúde</Link> : null}
+            {appointmentKind === 'consultation' ? ' preenchida e anexe uma imagem de referência se quiser.' : null}
+          </Alert>
+        </div>
+      ) : null}
+
+      {shouldPrioritizeBudget ? (
+        <>
+          <div className="ic-mb-2">
+            <Alert>
+              Você recebeu um orçamento para esta sessão. Revise o valor e aceite ou recuse
+              para o estúdio saber como seguir.
+            </Alert>
+          </div>
+          {renderBudgetCard()}
+        </>
+      ) : null}
+
       <Card>
         <CardHeader>
           <h2>{isNew ? 'Solicitação' : 'Detalhes'}</h2>
@@ -489,6 +721,11 @@ export function AppointmentFormPage() {
           {error ? (
             <div className="ic-mb-2">
               <Alert variant="error">{error}</Alert>
+            </div>
+          ) : null}
+          {flowMessage ? (
+            <div className="ic-mb-2">
+              <Alert>{flowMessage}</Alert>
             </div>
           ) : null}
 
@@ -520,12 +757,30 @@ export function AppointmentFormPage() {
               />
             </div>
           ) : null}
+          {!isNew && appointmentKind === 'service' && sourceConsultationSummary ? (
+            <div className="ic-mb-2">
+              <Alert>
+                Sessão liberada por avaliação de{' '}
+                {formatDateTime(sourceConsultationSummary.scheduled_at)}.
+              </Alert>
+            </div>
+          ) : null}
 
           <form onSubmit={handleSubmit}>
+            {isPendingStudioRequest ? (
+              <div className="ic-mb-2">
+                <Alert>
+                  Este pedido veio do cliente. O estúdio pode aceitar, recusar ou enviar uma
+                  contraproposta de horário; os dados originais não são editados diretamente.
+                </Alert>
+              </div>
+            ) : null}
             {isTattooer && !isNew ? null : (
               <>
                 {isClient && isNew ? (
-                  <p className="ic-muted ic-mb-2">Você está agendando em seu próprio nome.</p>
+                  <p className="ic-muted ic-mb-2">
+                    Você está solicitando {newClientRequestLabel} em seu próprio nome.
+                  </p>
                 ) : null}
 
                 {showClientPicker ? (
@@ -535,6 +790,7 @@ export function AppointmentFormPage() {
                         <Select
                           id="a-client"
                           required
+                          disabled={isPendingStudioRequest}
                           value={clientId}
                           onChange={(e) => setClientId(e.target.value)}
                         >
@@ -548,9 +804,8 @@ export function AppointmentFormPage() {
                       </Field>
                     ) : isStudio ? (
                       <div className="ic-mb-2">
-                        <Alert variant="error">
-                          Não há clientes cadastrados. Cadastre um cliente em Clientes antes de
-                          agendar.
+                        <Alert>
+                          Clientes aparecem automaticamente quando solicitam uma avaliação.
                         </Alert>
                       </div>
                     ) : null}
@@ -567,6 +822,7 @@ export function AppointmentFormPage() {
                       <Select
                         id="a-tattooer"
                         required
+                        disabled={isPendingStudioRequest}
                         value={tattooerId}
                         onChange={(e) => setTattooerId(e.target.value)}
                       >
@@ -592,6 +848,7 @@ export function AppointmentFormPage() {
                     id="a-when"
                     type="datetime-local"
                     required
+                    disabled={isPendingStudioRequest}
                     value={scheduledLocal}
                     onChange={(e) => setScheduledLocal(e.target.value)}
                   />
@@ -612,21 +869,13 @@ export function AppointmentFormPage() {
               </Field>
             ) : null}
 
-            {isTattooer && !isNew ? (
-              <Field label="Imagem de referência (opcional)" id="a-img-t">
-                <Input
-                  id="a-img-t"
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp"
-                  onChange={(e) => setReferenceImageFile(e.target.files?.[0] ?? null)}
-                />
-              </Field>
-            ) : !isTattooer || isNew ? (
-              <Field label="Imagem de referência (opcional)" id="a-img">
+            {canAttachReferenceImage ? (
+              <Field label={referenceImageLabel} hint={referenceImageHint} id="a-img">
                 <Input
                   id="a-img"
                   type="file"
                   accept="image/jpeg,image/png,image/webp"
+                  disabled={isPendingStudioRequest}
                   onChange={(e) => setReferenceImageFile(e.target.files?.[0] ?? null)}
                 />
               </Field>
@@ -637,16 +886,26 @@ export function AppointmentFormPage() {
                 id="a-desc"
                 rows={4}
                 value={description}
+                readOnly={isPendingStudioRequest}
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="Descreva a tatuagem, tamanho, local do corpo…"
               />
             </Field>
 
-            {isNew || !(isTattooer && !isNew) ? (
+            {isClient ? (
+              <Field label="Modalidade" id="a-kind-ro">
+                <Input
+                  id="a-kind-ro"
+                  value={APPOINTMENT_KIND_LABELS[appointmentKind] ?? appointmentKind}
+                  disabled
+                />
+              </Field>
+            ) : isNew || !(isTattooer && !isNew) ? (
               <Field label="Modalidade" id="a-kind">
                 <Select
                   id="a-kind"
                   value={appointmentKind}
+                  disabled={isPendingStudioRequest}
                   onChange={(e) => setAppointmentKind(e.target.value)}
                 >
                   <option value="service">{APPOINTMENT_KIND_LABELS.service}</option>
@@ -656,25 +915,53 @@ export function AppointmentFormPage() {
             ) : null}
 
             {!isNew ? (
-              <Field label="Status" id="a-status">
-                <Select
-                  id="a-status"
-                  value={status}
-                  onChange={(e) => setStatus(e.target.value)}
-                >
-                  {statusOptions.map((s) => (
-                    <option key={s} value={s}>
-                      {APPOINTMENT_STATUS_LABELS[s] ?? s}
-                    </option>
-                  ))}
-                </Select>
+              <Field label="Situação" id="a-status">
+                <Input id="a-status" value={APPOINTMENT_STATUS_LABELS[status] ?? status} disabled />
               </Field>
             ) : null}
 
             <div className="ic-form-actions">
-              <Button type="submit" variant="primary" disabled={saving || removing || cancelling}>
-                {saving ? 'Salvando…' : 'Salvar'}
+              <Button
+                type="submit"
+                variant="primary"
+                disabled={saving || removing || cancelling || Boolean(actionBusy)}
+              >
+                {saving
+                  ? 'Salvando…'
+                  : isNew && isClient
+                    ? `Solicitar ${newClientRequestLabel}`
+                    : 'Salvar'}
               </Button>
+              {canConfirmConsultation ? (
+                <Button
+                  type="button"
+                  variant="primary"
+                  disabled={saving || removing || cancelling || Boolean(actionBusy)}
+                  onClick={() => handleStatusAction('confirm', 'Avaliação confirmada.')}
+                >
+                  {actionBusy === 'confirm' ? 'Confirmando…' : 'Confirmar avaliação'}
+                </Button>
+              ) : null}
+              {canStartAppointment ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={saving || removing || cancelling || Boolean(actionBusy)}
+                  onClick={() => handleStatusAction('start', 'Atendimento iniciado.')}
+                >
+                  {actionBusy === 'start' ? 'Iniciando…' : 'Iniciar atendimento'}
+                </Button>
+              ) : null}
+              {canCompleteAppointment ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={saving || removing || cancelling || Boolean(actionBusy)}
+                  onClick={() => handleStatusAction('complete', 'Atendimento concluído.')}
+                >
+                  {actionBusy === 'complete' ? 'Concluindo…' : 'Concluir atendimento'}
+                </Button>
+              ) : null}
               <Button type="button" variant="ghost" disabled={saving || removing} onClick={goBack}>
                 Voltar à lista
               </Button>
@@ -682,7 +969,7 @@ export function AppointmentFormPage() {
                 <Button
                   type="button"
                   variant="danger"
-                  disabled={saving || removing || cancelling}
+                  disabled={saving || removing || cancelling || Boolean(actionBusy)}
                   onClick={handleCancelAppointment}
                 >
                   {cancelling ? 'Cancelando…' : 'Cancelar agendamento'}
@@ -702,6 +989,8 @@ export function AppointmentFormPage() {
           </form>
         </CardBody>
       </Card>
+
+      {shouldShowBudgetCard && !shouldPrioritizeBudget ? renderBudgetCard() : null}
 
       {!isNew ? (
         <Card className="ic-mt-4">

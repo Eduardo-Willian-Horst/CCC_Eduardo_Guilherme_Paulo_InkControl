@@ -64,6 +64,17 @@ export function AuthProvider({ children }) {
     return data.user
   }, [])
 
+  const registerStudio = useCallback(async (payload) => {
+    const data = await apiFetch('/api/studios/register/', {
+      method: 'POST',
+      skipAuth: true,
+      body: JSON.stringify(payload),
+    })
+    setStoredToken(data.token)
+    setUser(data.user)
+    return data
+  }, [])
+
   const value = useMemo(
     () => ({
       user,
@@ -71,10 +82,11 @@ export function AuthProvider({ children }) {
       login,
       logout,
       register,
+      registerStudio,
       refreshMe,
       isAuthenticated: Boolean(user),
     }),
-    [user, loading, login, logout, register, refreshMe],
+    [user, loading, login, logout, register, registerStudio, refreshMe],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

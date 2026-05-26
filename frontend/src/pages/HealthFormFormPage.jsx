@@ -27,6 +27,7 @@ export function HealthFormFormPage() {
 
   const [clients, setClients] = useState([])
   const [clientId, setClientId] = useState('')
+  const [clientDisplay, setClientDisplay] = useState('')
   const [allergies, setAllergies] = useState('')
   const [chronicDiseases, setChronicDiseases] = useState('')
   const [healingHistory, setHealingHistory] = useState('')
@@ -57,6 +58,7 @@ export function HealthFormFormPage() {
           const f = await apiFetch(`/api/health-forms/${id}/`)
           if (cancelled) return
           setClientId(String(f.client))
+          setClientDisplay(f.client_name || f.client_email || '')
           setAllergies(f.allergies ?? '')
           setChronicDiseases(f.chronic_diseases ?? '')
           setHealingHistory(f.healing_history ?? '')
@@ -195,21 +197,17 @@ export function HealthFormFormPage() {
                   </Select>
                 </Field>
               ) : (
-                <Field label="Cliente (ID interno)" id="hf-client-id">
-                  <Input
-                    id="hf-client-id"
-                    className="ds-input--mono"
-                    required
-                    disabled={readOnly}
-                    inputMode="numeric"
-                    value={clientId}
-                    onChange={(e) => setClientId(e.target.value)}
-                  />
-                </Field>
+                <Alert variant="error">
+                  Não foi possível carregar a lista de clientes. Volte à lista e tente novamente.
+                </Alert>
               )
             ) : (
               <Field label="Cliente" id="hf-client-ro">
-                <Input id="hf-client-ro" value={`#${clientId}`} disabled />
+                <Input
+                  id="hf-client-ro"
+                  value={clientDisplay || 'Cliente vinculado'}
+                  disabled
+                />
               </Field>
             )}
 

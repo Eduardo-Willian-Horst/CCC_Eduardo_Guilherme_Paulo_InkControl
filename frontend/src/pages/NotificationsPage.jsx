@@ -63,7 +63,7 @@ export function NotificationsPage() {
       <div className="ic-page__header">
         <div>
           <h1 className="ic-page__title">Notificações</h1>
-          <p className="ic-page__lede">Pedidos de alteração de horário e avisos do estúdio.</p>
+          <p className="ic-page__lede">Avisos de agendamentos, orçamentos e pedidos de alteração.</p>
         </div>
       </div>
 

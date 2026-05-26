@@ -98,23 +98,6 @@ class Client(models.Model):
         return self.name
 
 
-class ClientPortfolioImage(models.Model):
-    client = models.ForeignKey(
-        "Client",
-        on_delete=models.CASCADE,
-        related_name="portfolio_images",
-    )
-    image = models.ImageField(upload_to="client_portfolio/")
-    caption = models.CharField(max_length=200, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        ordering = ["-created_at"]
-
-    def __str__(self) -> str:
-        return f"Portfolio cliente {self.client_id} #{self.pk}"
-
-
 class Tattooer(models.Model):
     name = models.CharField(max_length=120)
     artistic_style = models.CharField(max_length=120)
@@ -198,6 +181,13 @@ class Appointment(models.Model):
         null=True,
         blank=True,
     )
+    source_consultation = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="sessions_from_consultation",
+    )
     duration_minutes = models.PositiveSmallIntegerField(default=60)
     # Orcamento (fluxo waiting_budget): enviado pelo estudio/tatuador ao cliente.
     budget_amount = models.DecimalField(
@@ -264,7 +254,7 @@ class StudioSettings(models.Model):
     opens_at = models.TimeField(default=time(9, 0))
     closes_at = models.TimeField(default=time(18, 0))
     offers_consultation = models.BooleanField(
-        default=False,
+        default=True,
         help_text="HU12: permite agendar avaliacao antes do servico.",
     )
 

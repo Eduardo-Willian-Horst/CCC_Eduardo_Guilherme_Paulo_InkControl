@@ -8,6 +8,16 @@ export function formatDateTime(isoString) {
   }).format(d)
 }
 
+export function formatBudgetAmount(value) {
+  if (value == null || value === '') return ''
+  const num = Number(value)
+  if (Number.isNaN(num)) return String(value)
+  return new Intl.NumberFormat('pt-BR', {
+    style: 'currency',
+    currency: 'BRL',
+  }).format(num)
+}
+
 export function formatDate(isoOrDate) {
   if (!isoOrDate) return ''
   const d = new Date(isoOrDate)
